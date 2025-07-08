@@ -55,8 +55,6 @@ This project reflects deep understanding of:
 - **Low-level performance tuning**
 - **Neural network integration in systems**
 
-Ideal for companies working on compilers, games, algorithms, or low-latency systems.
-
 ---
 
 ## ✅ Future Enhancements
