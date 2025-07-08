@@ -107,11 +107,11 @@ class search {
 
     i16 evaluate(threadContext &t, const position &pos);
     ui64 recursivePerft(position &pos, const int depth, const int ogDepth, const perftType typ) const;
-    searchParameters calcParams(const searchParameters params, const bool turn) const;
+    searchConstraints calcParams(const searchParameters params, const bool turn) const;
     bool shouldQuit(const threadContext &t);
     int drawEval(const threadContext &t) const;
 
-    searchParameters params;
+    searchConstraints constraints;
     std::chrono::high_resolution_clock::time_point startSearchTime;
     MultiArray<int, 32, 32> lmrTable;
 
