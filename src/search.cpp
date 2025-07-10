@@ -180,10 +180,3 @@ searchConstraints search::calcParams(const searchParameters params, const bool t
     return cons;
 
 }
-
-
-
-int main() {
-    cout<<"Works\n";
-    return 0;
-}
