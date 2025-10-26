@@ -1,9 +1,10 @@
-#include <stdio.h>
-//#include "position.h"
-#include "../inc/traditional.h"
-using namespace std;
+#include <iostream>
+#include "uci.h"
+#include "zobrist.h"
 
 int main(){
-	cout<<"Works\n";
-	return 0;
+    eng::Zobrist::init();
+    eng::UCI uci;
+    uci.loop();
+    return 0;
 }
