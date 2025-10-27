@@ -21,7 +21,7 @@ GitHub → [github.com/NoxiousTab/nox_engine](https://github.com/NoxiousTab/nox_
 
 - 12 Bitboards (one per piece type & color) track board state efficiently.
 - Move generation includes sliding attacks, castling, en passant, and promotions.
-- NNUE evaluates static positions based on neural network weights (`net.bin`).
+- NNUE evaluates static positions based on neural network weights.
 
 ---
 
