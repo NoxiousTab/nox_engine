@@ -1,5 +1,6 @@
 #include "uci.h"
 #include "nnue.h"
+#include "eval.h"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -62,6 +63,13 @@ void UCI::loop(){
             cmdSetOption(line);
         } else if(line.rfind("perft",0)==0){
             std::istringstream ss(line); std::string w; ss>>w; int d=1; ss>>d; if(d<0) d=0; Board tmp=board; uint64_t n=perftRec(tmp,d); std::cout<<n<<std::endl; std::cout.flush();
+        } else if(line.rfind("evalfen ",0)==0){
+            std::string fen = line.substr(8);
+            Board tmp; tmp.setFEN(fen);
+            int score = 0;
+            if (NNUE::isEnabled() && NNUE::isReady()) score = NNUE::evaluate(tmp);
+            else score = Eval::evaluate(tmp);
+            std::cout << score << std::endl; std::cout.flush();
         } else if(line == "ucinewgame"){
             board.setStartPos();
         } else if(line.rfind("position",0)==0){
