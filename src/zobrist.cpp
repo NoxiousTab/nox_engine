@@ -25,4 +25,4 @@ void Zobrist::init(){
     side = splitmix64(seed);
 }
 
-} // namespace eng
+}

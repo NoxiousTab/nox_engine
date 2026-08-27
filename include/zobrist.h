@@ -13,4 +13,4 @@ struct Zobrist {
     static void init();
 };
 
-} // namespace eng
+}

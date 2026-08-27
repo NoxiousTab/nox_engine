@@ -30,6 +30,9 @@ public:
 
     static bool inBounds(Square s) { return s >= 0 && s < 64; }
     static char colorOf(char p) { return p=='.'? 0 : (p>='A'&&p<='Z'? 'w':'b'); }
+    static bool inKnightBounds(Square from, Square to);
+    static bool slideOk(Square from, Square to, int d);
+    static bool kingStepOk(Square from, Square to);
 
     bool squareAttacked(Square sq, char bySide) const;
 
@@ -66,9 +69,10 @@ private:
     void genSlides(Square s, char p, const int* dirs, int ndirs, std::vector<Move>& out) const;
     void genKing(Square s, char p, std::vector<Move>& out) const;
     void genCastles(Square ksq, char k, std::vector<Move>& out) const;
-    bool inKnightBounds(Square from, Square to) const;
-    bool slideOk(Square from, Square to, int d) const;
-    bool kingStepOk(Square from, Square to) const;
+    // (inKnightBounds, slideOk, kingStepOk live as public static methods above --
+    //  they're pure square-geometry helpers with no dependency on board state,
+    //  so search.cpp and Board::see() can share the exact same implementation
+    //  instead of maintaining separate copies.)
 };
 
-} // namespace eng
+}

@@ -15,7 +15,7 @@ static std::atomic<bool> g_nnueReady{false};
 static std::string g_nnuePath;
 static std::string g_nnueDesc;
 static uint32_t g_nnueVersion{0};
-static uint32_t g_nnueHash{0};
+//static uint32_t g_nnueHash{0};
 
 static inline uint32_t read_le_u32(std::istream& s){ uint32_t v=0; s.read(reinterpret_cast<char*>(&v), sizeof(v)); return v; }
 
@@ -129,8 +129,9 @@ int NNUE::evaluate(const Board& b){
     double out = g_b3[0];
     for(uint32_t i=0;i<g_h2;++i){ out += g_w3[i] * y2[i]; }
     // return centipawns
-    if(out > 30000) out = 30000; if(out < -30000) out = -30000;
+    if(out > 30000) out = 30000;
+    if(out < -30000) out = -30000;
     return int(std::lround(out));
 }
 
-} // namespace eng
+}

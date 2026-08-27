@@ -7,4 +7,4 @@ struct Eval {
     static int evaluate(const Board& b);
 };
 
-} // namespace eng
+}

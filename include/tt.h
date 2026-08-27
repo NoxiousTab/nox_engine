@@ -21,6 +21,7 @@ class TT {
 public:
     TT() = default;
     void resizeMB(size_t mb){
+        std::lock_guard<std::mutex> lock(mtx);
         size_t bytes = mb * 1024ull * 1024ull;
         size_t n = bytes / sizeof(TTEntry);
         if(n < 1024) n = 1024;
@@ -59,4 +60,4 @@ private:
     }
 };
 
-} // namespace eng
+}

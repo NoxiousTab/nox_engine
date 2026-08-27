@@ -19,6 +19,22 @@ static uint64_t perftRec(Board& b, int depth){
     return nodes;
 }
 
+void UCI::stopAndJoinSearch(){
+    // If a background search is in flight, signal it to stop and wait for it
+    // to actually finish before returning. Every command handler that touches
+    // shared engine state (board, searcher config, the TT, NNUE settings, etc.)
+    // must call this first -- it's what makes it safe for those commands to run
+    // while a search would otherwise still be exploring in the background.
+    if(searchThread.joinable()){
+        searcher.stop = true;
+        searchThread.join();
+    }
+}
+
+UCI::~UCI(){
+    stopAndJoinSearch();
+}
+
 bool UCI::tryBookMove(Move& out){
     // Tiny built-in book: startpos first move only
     static int rot = 0; // simple round-robin
@@ -60,10 +76,16 @@ void UCI::loop(){
             std::cout << "readyok" << std::endl;
             std::cout.flush();
         } else if(line.rfind("setoption",0)==0){
+            stopAndJoinSearch(); // e.g. resizing the TT or changing Threads/Contempt
+                                  // while a search thread is using them would race
             cmdSetOption(line);
         } else if(line.rfind("perft",0)==0){
+            stopAndJoinSearch(); // copies `board`, which a search thread may be
+                                  // briefly mutating-and-restoring at the root
             std::istringstream ss(line); std::string w; ss>>w; int d=1; ss>>d; if(d<0) d=0; Board tmp=board; uint64_t n=perftRec(tmp,d); std::cout<<n<<std::endl; std::cout.flush();
         } else if(line.rfind("evalfen ",0)==0){
+            // evalfen builds its own independent Board from the given FEN and
+            // never touches the shared `board`/`searcher`, so no guard needed here.
             std::string fen = line.substr(8);
             Board tmp; tmp.setFEN(fen);
             int score = 0;
@@ -71,14 +93,22 @@ void UCI::loop(){
             else score = Eval::evaluate(tmp);
             std::cout << score << std::endl; std::cout.flush();
         } else if(line == "ucinewgame"){
+            stopAndJoinSearch();
             board.setStartPos();
         } else if(line.rfind("position",0)==0){
+            stopAndJoinSearch();
             cmdPosition(line);
         } else if(line.rfind("go",0)==0){
+            stopAndJoinSearch(); // defensive: ensures any previous search has
+                                  // fully finished before a new one starts
             cmdGo(line);
         } else if(line == "stop"){
+            // Just signal -- don't block here. The background search thread
+            // checks this flag at every node (see Searcher::searchRec), so it
+            // will unwind promptly and print "bestmove" itself when it does.
             searcher.stop = true;
         } else if(line == "quit"){
+            stopAndJoinSearch();
             break;
         } else if(line.rfind("debug",0)==0){
             std::istringstream ss(line); std::string w, v; ss>>w>>v; if(!v.empty()) debug = (v=="on");
@@ -169,18 +199,28 @@ void UCI::cmdGo(const std::string& line){
         else timeMs = 1000;
     }
     if(debug) std::cerr << "[debug] go timeMs="<<timeMs<<" depth="<<useDepth<< std::endl;
+    // Try book move if enabled -- this is instant, so handle it synchronously
+    // and return, no need to spin up a thread for it.
+    if(useBook){ Move bm; if(tryBookMove(bm)){ std::cout << "bestmove " << moveToUci(bm) << std::endl; std::cout.flush(); return; } }
     // Try to load NNUE at go time if enabled and not yet ready
     if(useNNUE && !evalFile.empty() && !NNUE::isReady()){
         NNUE::load(evalFile);
     }
-    int prevDepth = searcher.maxDepth; searcher.maxDepth = useDepth; searcher.threads = threads;
-    // Try book move if enabled
-    if(useBook){ Move bm; if(tryBookMove(bm)){ std::cout << "bestmove " << moveToUci(bm) << std::endl; std::cout.flush(); return; } }
-    SearchResult res = searcher.search(board, timeMs);
-    searcher.maxDepth = prevDepth;
-    if(res.best.from==0 && res.best.to==0){ std::cout << "bestmove 0000" << std::endl; }
-    else { std::cout << "bestmove " << moveToUci(res.best) << std::endl; }
-    std::cout.flush();
+    int prevDepth = searcher.maxDepth;
+    searcher.maxDepth = useDepth;
+    searcher.threads = threads;
+    searcher.stop = false;
+    // Run the actual search on a background thread so the main loop stays free
+    // to read "stop"/"quit"/etc. while it's in progress -- see stopAndJoinSearch().
+    // The thread prints "bestmove" itself once search() returns, since nothing
+    // else is blocking on it anymore.
+    searchThread = std::thread([this, timeMs, prevDepth]{
+        SearchResult res = searcher.search(board, timeMs);
+        searcher.maxDepth = prevDepth;
+        if(res.best.from==0 && res.best.to==0){ std::cout << "bestmove 0000" << std::endl; }
+        else { std::cout << "bestmove " << moveToUci(res.best) << std::endl; }
+        std::cout.flush();
+    });
 }
 
-} // namespace eng
+}

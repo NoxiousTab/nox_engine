@@ -13,4 +13,4 @@ struct NNUE {
     static int evaluate(const struct Board& b);
 };
 
-} // namespace eng
+}

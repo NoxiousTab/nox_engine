@@ -160,7 +160,8 @@ int Eval::evaluate(const Board& b){
     if(bk!=-1){ int br = rankOf(bk); int bf=fileOf(bk); if(br>=6){ for(int df=-1; df<=1; ++df){ int f=bf+df; if(f<0||f>7) continue; int sq = (br-1)*8+f; if(brd[sq]=='p') score -= 5; else score += 5; } } }
 
     // bishop pair bonus
-    if(wB>=2) score += 30; if(bB>=2) score -= 30;
+    if(wB>=2) score += 30;
+    if(bB>=2) score -= 30;
 
     // rook features: open/semi-open files and 7th rank
     auto isFileOpen = [&](int f){ for(int r=0;r<8;r++){ char p=brd[r*8+f]; if(p=='P'||p=='p') return false; } return true; };
@@ -176,4 +177,4 @@ int Eval::evaluate(const Board& b){
     return score;
 }
 
-} // namespace eng
+}

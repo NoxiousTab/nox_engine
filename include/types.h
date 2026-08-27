@@ -39,4 +39,4 @@ inline Square coordToSq(const std::string& s) {
     return r * 8 + f;
 }
 
-} // namespace eng
+}

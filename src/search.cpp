@@ -27,11 +27,6 @@ static int pieceVal(char p) {
     }
 }
 
-static bool inBounds(int s){ return s>=0 && s<64; }
-static bool knightStepOk(int from,int to){ if(!inBounds(to)) return false; int ff=from%8, tf=to%8; int fr=from/8, tr=to/8; int df=std::abs(ff-tf), dr=std::abs(fr-tr); return (df==1&&dr==2)||(df==2&&dr==1); }
-static bool kingStepOkLocal(int from,int to){ if(!inBounds(to)) return false; int df=std::abs(from%8 - to%8), dr=std::abs(from/8 - to/8); return std::max(df,dr)==1; }
-static bool slideOkLocal(int from,int to,int d){ if(!inBounds(to)) return false; int ff=from%8, tf=to%8; int fr=from/8, tr=to/8; if(d== -1 || d==1) return std::abs(tf-ff)==std::abs(to-from); if(d== -9 || d== -7 || d==7 || d==9) return std::abs(tf-ff)==std::abs(tr-fr); if(d== -8 || d==8) return tf==ff; return true; }
-
 static int lvaAttackerValue(const Board& b, int sq, char side){
     static const int KNIGHT_DIRS[8] = {-17,-15,-10,-6,6,10,15,17};
     static const int BISHOP_DIRS[4] = {-9,-7,7,9};
@@ -43,16 +38,17 @@ static int lvaAttackerValue(const Board& b, int sq, char side){
         char up = std::toupper(p);
         bool attacks=false;
         if(up=='N'){
-            for(int d:KNIGHT_DIRS){ int to=f+d; if(knightStepOk(f,to) && to==sq){ attacks=true; break; } }
+            for(int d:KNIGHT_DIRS){ int to=f+d; if(Board::inKnightBounds(f,to) && to==sq){ attacks=true; break; } }
         } else if(up=='B' || up=='Q'){
-            for(int d:BISHOP_DIRS){ int to=f+d; while(inBounds(to) && slideOkLocal(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
+            for(int d:BISHOP_DIRS){ int to=f+d; while(Board::inBounds(to) && Board::slideOk(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
         } else if(up=='R' || up=='Q'){
-            for(int d:ROOK_DIRS){ int to=f+d; while(inBounds(to) && slideOkLocal(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
+            for(int d:ROOK_DIRS){ int to=f+d; while(Board::inBounds(to) && Board::slideOk(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
         } else if(up=='K'){
-            for(int d:KING_DIRS){ int to=f+d; if(kingStepOkLocal(f,to) && to==sq){ attacks=true; break; } }
+            for(int d:KING_DIRS){ int to=f+d; if(Board::kingStepOk(f,to) && to==sq){ attacks=true; break; } }
         } else if(up=='P'){
-            int dir = (p=='P')? 8 : -8; // white pawns attack up (sq-from == 7 or 9)
-            int df1 = (p=='P')? 7 : -7; int df2 = (p=='P')? 9 : -9; if(f+df1==sq || f+df2==sq) attacks=true;
+            int ff=f%8, fr=f/8, tf=sq%8, tr=sq/8;
+            int wantRank = fr + (p=='P'?1:-1);
+            if(tr==wantRank && std::abs(tf-ff)==1) attacks=true;
         }
         if(attacks){ int v = std::abs(pieceVal(p)); if(v < best) best = v; }
     }
@@ -271,20 +267,32 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
 
     // Move ordering: TT move first, then captures by MVV-LVA, then killers, then history
     Move ttMove = (tt.probe(key, e) ? e.best : Move{});
-    std::sort(moves.begin(), moves.end(), [&](const Move& a, const Move& bmv){
-        auto scoreMove = [&](const Move& m){
-            int score = 0;
-            if(m.from==ttMove.from && m.to==ttMove.to && (!((m.flags & PROMOTION) && ttMove.promo && m.promo!=ttMove.promo))) score += 1'000'000;
-            if(m.flags & (CAPTURE|EN_PASSANT|PROMOTION)) score += 100'000 + mvv_lva(b, m);
-            // killers
-            for(int i=0;i<2;i++){ if(killers[ply][i].from==m.from && killers[ply][i].to==m.to) { score += 50'000; break; } }
-            // history (very simple: index by from square per side)
-            int sideIdx = (b.st.side=='w')?0:1;
-            score += history[sideIdx][m.from & 63];
-            return score;
-        };
-        return scoreMove(a) > scoreMove(bmv);
-    });
+    // Snapshot killers/history under the lock exactly once, up front. This avoids
+    // reading them unsynchronized inside the sort comparator (which raced against
+    // the mutex-protected writes on beta cutoffs when Threads > 1), and as a side
+    // benefit computes each move's score exactly once instead of the O(n log n)
+    // redundant recomputation the old per-comparison lambda did.
+    Move killer0{}, killer1{};
+    int sideIdx = (b.st.side=='w')?0:1;
+    std::vector<int> histSnapshot(moves.size());
+    {
+        std::lock_guard<std::mutex> lk(khMutex);
+        killer0 = killers[ply][0];
+        killer1 = killers[ply][1];
+        for(size_t i=0;i<moves.size();++i) histSnapshot[i] = history[sideIdx][moves[i].from & 63];
+    }
+    std::vector<std::pair<int,Move>> scored; scored.reserve(moves.size());
+    for(size_t i=0;i<moves.size();++i){
+        const Move& m = moves[i];
+        int score = 0;
+        if(m.from==ttMove.from && m.to==ttMove.to && (!((m.flags & PROMOTION) && ttMove.promo && m.promo!=ttMove.promo))) score += 1'000'000;
+        if(m.flags & (CAPTURE|EN_PASSANT|PROMOTION)) score += 100'000 + mvv_lva(b, m);
+        if((killer0.from==m.from && killer0.to==m.to) || (killer1.from==m.from && killer1.to==m.to)) score += 50'000;
+        score += histSnapshot[i];
+        scored.push_back({score, m});
+    }
+    std::stable_sort(scored.begin(), scored.end(), [](const auto& x, const auto& y){ return x.first > y.first; });
+    for(size_t i=0;i<moves.size();++i) moves[i] = scored[i].second;
 
     Move best = {};
     int bestScore = std::numeric_limits<int>::min();
@@ -406,4 +414,4 @@ int Searcher::evalWithContempt(const Board& b) const{
     return e;
 }
 
-} // namespace eng
+}

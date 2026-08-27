@@ -37,20 +37,16 @@ int Board::see(const Move& m) const{
     static const int BISHOP_DIRS[4] = {-9,-7,7,9};
     static const int ROOK_DIRS[4]   = {-8,-1,1,8};
     static const int KING_DIRS[8]   = {-9,-8,-7,-1,1,7,8,9};
-    auto inB=[&](int s){ return s>=0 && s<64; };
-    auto kOk=[&](int f,int t){ if(!inB(t)) return false; int df=std::abs(f%8 - t%8), dr=std::abs(f/8 - t/8); return std::max(df,dr)==1; };
-    auto nOk=[&](int f,int t){ if(!inB(t)) return false; int ff=f%8, tf=t%8; int fr=f/8, tr=t/8; int df=std::abs(ff-tf), dr=std::abs(fr-tr); return (df==1&&dr==2)||(df==2&&dr==1); };
-    auto slOk=[&](int f,int t,int d){ if(!inB(t)) return false; int ff=f%8, tf=t%8; int fr=f/8, tr=t/8; if(d== -1 || d==1) return std::abs(tf-ff)==std::abs(t-f); if(d== -9 || d== -7 || d==7 || d==9) return std::abs(tf-ff)==std::abs(tr-fr); if(d== -8 || d==8) return tf==ff; return true; };
     const auto& b2 = tb.st.board;
     for(int f=0; f<64; ++f){
         char p=b2[f]; if(p=='.') continue; if(colorOf(p)!=opp) continue; char up=std::toupper(p);
         bool att=false;
         if(up=='N'){
-            for(int d:KNIGHT_DIRS){ int t=f+d; if(nOk(f,t)&&t==sq){ att=true; break; } }
+            for(int d:KNIGHT_DIRS){ int t=f+d; if(inKnightBounds(f,t)&&t==sq){ att=true; break; } }
         } else if(up=='B'||up=='Q'){
             for(int d:BISHOP_DIRS){
                 int t=f+d;
-                while(inB(t)&&slOk(f,t,d)){
+                while(inBounds(t)&&slideOk(f,t,d)){
                     char q=b2[t];
                     if(t==sq){ att=true; break; }
                     if(q!='.') break;
@@ -61,7 +57,7 @@ int Board::see(const Move& m) const{
         } else if(up=='R'||up=='Q'){
             for(int d:ROOK_DIRS){
                 int t=f+d;
-                while(inB(t)&&slOk(f,t,d)){
+                while(inBounds(t)&&slideOk(f,t,d)){
                     char q=b2[t];
                     if(t==sq){ att=true; break; }
                     if(q!='.') break;
@@ -70,9 +66,11 @@ int Board::see(const Move& m) const{
                 if(att) break;
             }
         } else if(up=='K'){
-            for(int d:KING_DIRS){ int t=f+d; if(kOk(f,t)&&t==sq){ att=true; break; } }
+            for(int d:KING_DIRS){ int t=f+d; if(kingStepOk(f,t)&&t==sq){ att=true; break; } }
         } else if(up=='P'){
-            int df1=(p=='P')?7:-7, df2=(p=='P')?9:-9; if(f+df1==sq||f+df2==sq) att=true;
+            int ff=f%8, fr=f/8, tf=sq%8, tr=sq/8;
+            int wantRank = fr + (p=='P'?1:-1);
+            if(tr==wantRank && std::abs(tf-ff)==1) att=true;
         }
         if(att){ int v=absVal(p); if(v<best) best=v; }
     }
@@ -218,28 +216,44 @@ std::string Board::getFEN() const{
         rows += row; if(r) rows+='/';
     }
     std::string cr;
-    if(st.castling&1) cr+='K'; if(st.castling&2) cr+='Q'; if(st.castling&4) cr+='k'; if(st.castling&8) cr+='q'; if(cr.empty()) cr="-";
+    if(st.castling&1) cr+='K';
+    if(st.castling&2) cr+='Q';
+    if(st.castling&4) cr+='k';
+    if(st.castling&8) cr+='q';
+    if(cr.empty()) cr="-";
     std::string ep = (st.ep==-1? "-" : sqToCoord(st.ep));
     std::ostringstream out; out<<rows<<' '<<st.side<<' '<<cr<<' '<<ep<<' '<<st.halfmove<<' '<<st.fullmove;
     return out.str();
 }
 
-bool Board::inKnightBounds(Square from, Square to) const{
+bool Board::inKnightBounds(Square from, Square to){
     if(!inBounds(to)) return false;
     int ff=from%8, tf=to%8; int fr=from/8, tr=to/8; int df=std::abs(ff-tf), dr=std::abs(fr-tr);
     return (df==1&&dr==2)||(df==2&&dr==1);
 }
 
-bool Board::slideOk(Square from, Square to, int d) const{
+bool Board::slideOk(Square from, Square to, int d){
     if(!inBounds(to)) return false;
-    int ff=from%8, tf=to%8; int fr=from/8, tr=to/8;
-    if(d== -1 || d==1) return std::abs(tf-ff)==std::abs(to-from);
-    if(d== -9 || d== -7 || d==7 || d==9) return std::abs(tf-ff)==std::abs(tr-fr);
-    if(d== -8 || d==8) return tf==ff;
-    return true;
+    if(d==0 || (to-from)%d!=0) return false;
+    int steps = (to-from)/d;
+    if(steps == 0) return false;
+    int dfile=0, drank=0;
+    switch(d){
+        case 1:  dfile= 1; drank= 0; break;
+        case -1: dfile=-1; drank= 0; break;
+        case 8:  dfile= 0; drank= 1; break;
+        case -8: dfile= 0; drank=-1; break;
+        case 9:  dfile= 1; drank= 1; break;
+        case -9: dfile=-1; drank=-1; break;
+        case 7:  dfile=-1; drank= 1; break;
+        case -7: dfile= 1; drank=-1; break;
+        default: return true;
+    }
+    int ff=from%8, tf=to%8, fr=from/8, tr=to/8;
+    return (tf-ff)==dfile*steps && (tr-fr)==drank*steps;
 }
 
-bool Board::kingStepOk(Square from, Square to) const{
+bool Board::kingStepOk(Square from, Square to){
     if(!inBounds(to)) return false;
     int df=std::abs(from%8 - to%8), dr=std::abs(from/8 - to/8);
     return std::max(df,dr)==1;
@@ -251,14 +265,14 @@ bool Board::squareAttacked(Square sq, char bySide) const{
     if(bySide=='w'){
         for(int d : {7,9}){
             int fr = sq - d; if(!inBounds(fr)) continue;
-            int sf = sq%8, ff=fr%8; if((d==7 && ff==sf-1) || (d==9 && ff==sf+1)){
+            int sf = sq%8, ff=fr%8; if((d==7 && ff==sf+1) || (d==9 && ff==sf-1)){
                 if(b[fr]=='P') return true;
             }
         }
     } else {
         for(int d : {7,9}){
             int fr = sq + d; if(!inBounds(fr)) continue;
-            int sf = sq%8, ff=fr%8; if((d==7 && ff==sf+1) || (d==9 && ff==sf-1)){
+            int sf = sq%8, ff=fr%8; if((d==7 && ff==sf-1) || (d==9 && ff==sf+1)){
                 if(b[fr]=='p') return true;
             }
         }
@@ -330,11 +344,11 @@ void Board::genPawn(Square s, char p, std::vector<Move>& out) const{
 
 void Board::genKing(Square s, char p, std::vector<Move>& out) const{
     const auto& b = st.board; char side=colorOf(p);
-    for(int d : KING_DIRS){ int to=s+d; if(!kingStepOk(s,to)) continue; char q = inBounds(to)?b[to]:'.'; if(q=='.' || colorOf(q)!=side) out.push_back({s,to,0, (q!='.')?CAPTURE:0}); }
+    for(int d : KING_DIRS){ int to=s+d; if(!kingStepOk(s,to)) continue; char q = inBounds(to)?b[to]:'.'; if(q=='.' || colorOf(q)!=side) out.push_back({s,to,0, static_cast<uint16_t>((q!='.')?CAPTURE:0)}); }
     genCastles(s, p, out);
 }
 
-void Board::genCastles(Square ksq, char k, std::vector<Move>& out) const{
+void Board::genCastles(Square /*ksq*/, char k, std::vector<Move>& out) const{
     const auto& b = st.board; char side = (k=='K')?'w':'b';
     if(side=='w'){
         if((st.castling&1) && b[5]=='.' && b[6]=='.'){
@@ -360,7 +374,7 @@ std::vector<Move> Board::generateLegalMoves(){
     for(int s=0;s<64;++s){ char p=b[s]; if(p=='.' || colorOf(p)!=side) continue;
         switch(std::toupper(p)){
             case 'P': genPawn(s,p,moves); break;
-            case 'N': for(int d:KNIGHT_DIRS){ int to=s+d; if(!inKnightBounds(s,to)) continue; char q=inBounds(to)?b[to]:'.'; if(q=='.' || colorOf(q)!=colorOf(p)) moves.push_back({s,to,0, (q!='.')?CAPTURE:0}); } break;
+            case 'N': for(int d:KNIGHT_DIRS){ int to=s+d; if(!inKnightBounds(s,to)) continue; char q=inBounds(to)?b[to]:'.'; if(q=='.' || colorOf(q)!=colorOf(p)) moves.push_back({s,to,0, static_cast<uint16_t>((q!='.')?CAPTURE:0)}); } break;
             case 'B': genSlides(s,p,BISHOP_DIRS,4,moves); break;
             case 'R': genSlides(s,p,ROOK_DIRS,4,moves); break;
             case 'Q': genSlides(s,p,QUEEN_DIRS,8,moves); break;
@@ -439,4 +453,4 @@ void Board::unmakeMove(){
     b[u.m.to] = u.captured;
 }
 
-} // namespace eng
+}

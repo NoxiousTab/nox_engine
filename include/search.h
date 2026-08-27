@@ -20,7 +20,7 @@ public:
     std::atomic<bool> stop{false};
     int contempt{0}; // centipawns bias for drawish positions
     TT tt;
-    size_t nodes{0};
+    std::atomic<size_t> nodes{0};
     std::chrono::steady_clock::time_point deadline;
     std::chrono::steady_clock::time_point softDeadline;
     int threads{1};
@@ -43,4 +43,4 @@ private:
     bool badCaptureHeuristic(const Board& b, const Move& m, int stand) const;
 };
 
-} // namespace eng
+}
