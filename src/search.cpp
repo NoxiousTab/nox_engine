@@ -27,34 +27,6 @@ static int pieceVal(char p) {
     }
 }
 
-static int lvaAttackerValue(const Board& b, int sq, char side){
-    static const int KNIGHT_DIRS[8] = {-17,-15,-10,-6,6,10,15,17};
-    static const int BISHOP_DIRS[4] = {-9,-7,7,9};
-    static const int ROOK_DIRS[4]   = {-8,-1,1,8};
-    static const int KING_DIRS[8]   = {-9,-8,-7,-1,1,7,8,9};
-    const auto& brd = b.st.board;
-    int best = 1e9;
-    for(int f=0; f<64; ++f){ char p = brd[f]; if(p=='.') continue; if((side=='w' && !(p>='A'&&p<='Z')) || (side=='b' && !(p>='a'&&p<='z'))) continue;
-        char up = std::toupper(p);
-        bool attacks=false;
-        if(up=='N'){
-            for(int d:KNIGHT_DIRS){ int to=f+d; if(Board::inKnightBounds(f,to) && to==sq){ attacks=true; break; } }
-        } else if(up=='B' || up=='Q'){
-            for(int d:BISHOP_DIRS){ int to=f+d; while(Board::inBounds(to) && Board::slideOk(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
-        } else if(up=='R' || up=='Q'){
-            for(int d:ROOK_DIRS){ int to=f+d; while(Board::inBounds(to) && Board::slideOk(f,to,d)){ char q=brd[to]; if(to==sq){ attacks=true; break; } if(q!='.') break; to+=d; } if(attacks) break; }
-        } else if(up=='K'){
-            for(int d:KING_DIRS){ int to=f+d; if(Board::kingStepOk(f,to) && to==sq){ attacks=true; break; } }
-        } else if(up=='P'){
-            int ff=f%8, fr=f/8, tf=sq%8, tr=sq/8;
-            int wantRank = fr + (p=='P'?1:-1);
-            if(tr==wantRank && std::abs(tf-ff)==1) attacks=true;
-        }
-        if(attacks){ int v = std::abs(pieceVal(p)); if(v < best) best = v; }
-    }
-    return best==1e9? 0 : best;
-}
-
 static std::string moveToUciPV(const Move& m) {
     std::string s = sqToCoord(m.from) + sqToCoord(m.to);
     if ((m.flags & PROMOTION) && m.promo) s += (char)std::tolower(m.promo);
@@ -78,25 +50,13 @@ std::string Searcher::buildPV(Board& b, int maxLen) {
 }
 
 bool Searcher::badCaptureHeuristic(const Board& b, const Move& m, int /*stand*/) const {
+    // A capture is "bad" if the full static exchange evaluation shows it
+    // loses material -- this used to be approximated with a shallow one-ply
+    // lookahead (a duplicate of the same idea living in three different
+    // files); it's now backed by Board::see(), a proper, verified recursive
+    // exchange evaluation (see tests/see_test.py).
     if (!(m.flags & (CAPTURE | EN_PASSANT))) return false;
-    const auto& brd = b.st.board;
-    char attacker = brd[m.from];
-    char captured = (m.flags & EN_PASSANT) ? (b.st.side == 'w' ? 'p' : 'P') : brd[m.to];
-    int attV = std::abs(pieceVal(attacker));
-    int capV = std::abs(pieceVal(captured));
-    // Quick MVV-LVA gate: if we win material on face value, accept
-    if (capV >= attV) return false;
-    // Light square safety check: after move, is our piece attacked on the target square?
-    Board tb = b; if(!tb.makeMove(m)) return true; // illegal -> bad
-    char opp = (tb.st.side=='w')?'b':'w'; // side to move is opponent after makeMove
-    bool attacked = tb.squareAttacked(m.to, opp);
-    tb.unmakeMove();
-    if(!attacked) return false;
-    // Quick LVA-based exchange check: can opponent recapture cheaply?
-    int oppLVA = lvaAttackerValue(tb, m.to, opp);
-    if(oppLVA==0) return false; // no recapture
-    // If opponent's cheapest attacker is less valuable than the gain, likely bad
-    return (capV - oppLVA) < -20;
+    return b.see(m) < 0;
 }
 
 static int mvv_lva(const Board& b, const Move& m) {

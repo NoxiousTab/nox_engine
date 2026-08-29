@@ -83,6 +83,20 @@ void UCI::loop(){
             stopAndJoinSearch(); // copies `board`, which a search thread may be
                                   // briefly mutating-and-restoring at the root
             std::istringstream ss(line); std::string w; ss>>w; int d=1; ss>>d; if(d<0) d=0; Board tmp=board; uint64_t n=perftRec(tmp,d); std::cout<<n<<std::endl; std::cout.flush();
+        } else if(line.rfind("see ",0)==0){
+            // see <uci_move> <fen...>  -- independent of shared board/searcher,
+            // used for testing/validating Board::see() directly.
+            std::istringstream ss(line); std::string w, moveStr; ss>>w>>moveStr;
+            std::string f1,f2,f3,f4,f5,f6; ss>>f1>>f2>>f3>>f4>>f5>>f6;
+            std::string fen = f1+" "+f2+" "+f3+" "+f4+" "+f5+" "+f6;
+            Board tmp; tmp.setFEN(fen);
+            Square from = coordToSq(moveStr.substr(0,2));
+            Square to   = coordToSq(moveStr.substr(2,2));
+            char promo = 0; if(moveStr.size()>=5){ char c=std::tolower(moveStr[4]); if(c=='q'||c=='r'||c=='b'||c=='n') promo=(tmp.st.side=='w')?std::toupper(c):c; }
+            auto moves = tmp.generateLegalMoves();
+            Move found{};
+            for(const auto& mv: moves){ if(mv.from==from && mv.to==to){ if(mv.flags & PROMOTION){ if(promo && mv.promo==promo){ found=mv; break; } else continue; } found=mv; break; } }
+            std::cout << tmp.see(found) << std::endl; std::cout.flush();
         } else if(line.rfind("evalfen ",0)==0){
             // evalfen builds its own independent Board from the given FEN and
             // never touches the shared `board`/`searcher`, so no guard needed here.

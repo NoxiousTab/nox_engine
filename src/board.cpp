@@ -19,63 +19,132 @@ void Board::setStartPos(){
 }
 
 int Board::see(const Move& m) const{
-    // Very light SEE: face-value gain minus cheapest immediate recapture value if square remains attacked.
-    const auto& brd = st.board;
-    if(!(m.flags & (CAPTURE|EN_PASSANT))) return 0;
-    auto absVal = [](char p){ switch(p){ case 'P':case 'p': return 100; case 'N':case 'n': return 320; case 'B':case 'b': return 330; case 'R':case 'r': return 500; case 'Q':case 'q': return 900; default: return 0; } };
-    char captured = (m.flags & EN_PASSANT)? ((st.side=='w')?'p':'P') : brd[m.to];
-    char attacker = brd[m.from];
-    int gain = absVal(captured) - absVal(attacker);
-    // Simulate move and check if target square can be recaptured cheaply
-    Board tb = *this;
-    if(!tb.makeMove(m)) return -10000;
-    char opp = (tb.st.side=='w')?'b':'w';
-    // Find least valuable attacker of the square by opponent
-    int sq = m.to;
-    int best = 1e9;
-    static const int KNIGHT_DIRS[8] = {-17,-15,-10,-6,6,10,15,17};
-    static const int BISHOP_DIRS[4] = {-9,-7,7,9};
-    static const int ROOK_DIRS[4]   = {-8,-1,1,8};
-    static const int KING_DIRS[8]   = {-9,-8,-7,-1,1,7,8,9};
-    const auto& b2 = tb.st.board;
-    for(int f=0; f<64; ++f){
-        char p=b2[f]; if(p=='.') continue; if(colorOf(p)!=opp) continue; char up=std::toupper(p);
-        bool att=false;
-        if(up=='N'){
-            for(int d:KNIGHT_DIRS){ int t=f+d; if(inKnightBounds(f,t)&&t==sq){ att=true; break; } }
-        } else if(up=='B'||up=='Q'){
-            for(int d:BISHOP_DIRS){
-                int t=f+d;
-                while(inBounds(t)&&slideOk(f,t,d)){
-                    char q=b2[t];
-                    if(t==sq){ att=true; break; }
-                    if(q!='.') break;
-                    t+=d;
-                }
-                if(att) break;
-            }
-        } else if(up=='R'||up=='Q'){
-            for(int d:ROOK_DIRS){
-                int t=f+d;
-                while(inBounds(t)&&slideOk(f,t,d)){
-                    char q=b2[t];
-                    if(t==sq){ att=true; break; }
-                    if(q!='.') break;
-                    t+=d;
-                }
-                if(att) break;
-            }
-        } else if(up=='K'){
-            for(int d:KING_DIRS){ int t=f+d; if(kingStepOk(f,t)&&t==sq){ att=true; break; } }
-        } else if(up=='P'){
-            int ff=f%8, fr=f/8, tf=sq%8, tr=sq/8;
-            int wantRank = fr + (p=='P'?1:-1);
-            if(tr==wantRank && std::abs(tf-ff)==1) att=true;
+    // Full static exchange evaluation via the standard "swap algorithm":
+    // gather attackers of the target square for each side in turn, simulate
+    // the whole alternating capture sequence (removing the used attacker and
+    // re-checking for newly-revealed x-ray attackers each step), then back
+    // out the final result via minimax -- each side only "recaptures" if doing
+    // so doesn't lose them material. This also works for non-capturing moves
+    // (evaluating whether the destination square is safe to move to), matching
+    // the standard community SEE test suite this was validated against.
+    if(m.flags & CASTLE) return 0; // no material exchange to evaluate for castling
+
+    static const int BISHOP_D[4] = {-9,-7,7,9};
+    static const int ROOK_D[4]   = {-8,-1,1,8};
+
+    // SEE conventionally uses simple, fixed material values (distinct from
+    // eval.cpp's tuned positional values) -- this is standard practice, since
+    // SEE is a tactical material-counting heuristic, not a positional one.
+    auto absVal = [](char p)->int{
+        switch(std::toupper((unsigned char)p)){
+            case 'P': return 100;
+            case 'N': return 300;
+            case 'B': return 300;
+            case 'R': return 500;
+            case 'Q': return 900;
+            case 'K': return 20000;
+            default:  return 0; // '.' (empty square)
         }
-        if(att){ int v=absVal(p); if(v<best) best=v; }
+    };
+
+    auto attacksSquare = [&](const std::array<char,64>& occ, int from, int to)->bool{
+        char p = occ[from]; if(p=='.') return false;
+        char up = std::toupper((unsigned char)p);
+        if(up=='N') return inKnightBounds(from, to);
+        if(up=='K') return kingStepOk(from, to);
+        if(up=='P'){
+            int ff=from%8, fr=from/8, tf=to%8, tr=to/8;
+            int wantRank = fr + (p=='P' ? 1 : -1);
+            return (tr==wantRank && std::abs(tf-ff)==1);
+        }
+        auto slidesTo = [&](const int* dirs, int ndirs)->bool{
+            for(int i=0;i<ndirs;i++){
+                int d = dirs[i];
+                int t = from + d;
+                while(inBounds(t) && slideOk(from, t, d)){
+                    if(t==to) return true;
+                    if(occ[t] != '.') break; // blocked by another piece
+                    t += d;
+                }
+            }
+            return false;
+        };
+        if(up=='B') return slidesTo(BISHOP_D, 4);
+        if(up=='R') return slidesTo(ROOK_D, 4);
+        if(up=='Q') return slidesTo(BISHOP_D, 4) || slidesTo(ROOK_D, 4);
+        return false;
+    };
+
+    std::array<char,64> occ = st.board;
+    int toSq = m.to;
+    int fromSq = m.from;
+    char mover = occ[fromSq];
+    char firstSide = colorOf(mover);
+
+    char capturedPiece;
+    if(m.flags & EN_PASSANT){
+        int capSq = (firstSide=='w') ? toSq - 8 : toSq + 8;
+        capturedPiece = occ[capSq];
+        occ[capSq] = '.';
+    } else {
+        capturedPiece = occ[toSq]; // '.' for a quiet (non-capturing) move
     }
-    if(best==1e9) return gain;
-    return gain - best;
+
+    int gain[32];
+    int d = 0;
+    gain[0] = absVal(capturedPiece);
+    int curOccupantVal = absVal(mover);
+    if(m.flags & PROMOTION){
+        int promoVal = absVal(m.promo);
+        gain[0] += (promoVal - absVal(mover)); // pawn becomes the promoted piece
+        curOccupantVal = promoVal;             // that's now what's at risk on toSq
+    }
+
+    occ[fromSq] = '.'; // mover leaves its origin square -- may reveal x-ray attackers
+    occ[toSq] = '.';   // avoid any stale leftover piece char on the target square
+
+    char sideToMove = (firstSide=='w') ? 'b' : 'w';
+    while(d < 31){
+        int lvaSq = -1, lvaVal = 1000000, lvaCompareVal = 1000000;
+        for(int f=0; f<64; ++f){
+            char p = occ[f]; if(p=='.' || colorOf(p)!=sideToMove) continue;
+            if(attacksSquare(occ, f, toSq)){
+                bool promotes = (p=='P' && toSq/8==7) || (p=='p' && toSq/8==0);
+                // A pawn that would promote on capturing here is effectively
+                // committing a queen's worth of risk, not a pawn's -- so for
+                // *choosing* the least valuable attacker it must be compared
+                // at queen value, even though the actual pawn value (plus the
+                // promotion bonus) is what gets booked into gain[] below.
+                int compareVal = promotes ? absVal('Q') : absVal(p);
+                if(compareVal < lvaCompareVal){ lvaCompareVal = compareVal; lvaVal = absVal(p); lvaSq = f; }
+            }
+        }
+        if(lvaSq == -1) break; // no more attackers -- exchange sequence ends
+
+        d++;
+        char lvaPiece = occ[lvaSq];
+        bool lvaPromotes = (lvaPiece=='P' && toSq/8==7) || (lvaPiece=='p' && toSq/8==0);
+        if(lvaPromotes){
+            // A pawn reaching the back rank is forced to promote -- this is
+            // part of the same capturing step, so its extra value (assuming
+            // queen, the conventional choice for SEE purposes) is booked here
+            // too, exactly like the initiating move's promotion bonus above.
+            int promoBonus = absVal('Q') - lvaVal;
+            gain[d] = (curOccupantVal - gain[d-1]) + promoBonus;
+            curOccupantVal = absVal('Q');
+        } else {
+            gain[d] = curOccupantVal - gain[d-1];
+            curOccupantVal = lvaVal;
+        }
+        occ[lvaSq] = '.';
+        sideToMove = (sideToMove=='w') ? 'b' : 'w';
+    }
+
+    while(d > 0){
+        gain[d-1] = -std::max(-gain[d-1], gain[d]);
+        d--;
+    }
+    return gain[0];
 }
 
 std::vector<Move> Board::generateCaptures(){
