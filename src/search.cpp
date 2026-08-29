@@ -128,7 +128,7 @@ SearchResult Searcher::search(Board& b, int timeMs){
                 int score = -searchRec(tb, nextDepth, -beta, -aSnap, 1);
                 std::lock_guard<std::mutex> lock(mtx);
                 if(score > localBestScore){ localBestScore = score; localBest = m; }
-                if(score > alpha){ alpha = score; best = m; bestScore = score; }
+                if(score > alpha){ alpha = score; }
                 if(alpha >= beta){ stop = stop || timeUpLocal(); break; }
             }
         };
@@ -141,8 +141,17 @@ SearchResult Searcher::search(Board& b, int timeMs){
             worker();
         }
 
-        lastScore = bestScore = (best.from||best.to) ? std::max(localBestScore, bestScore) : localBestScore;
-        if(!(best.from||best.to)) best = localBest;
+        // localBest/localBestScore unconditionally track the best move actually
+        // found this depth (regardless of whether it beat the narrow aspiration
+        // window) -- best/bestScore must always match that, never be left
+        // pointing at a stale move from an earlier, shallower depth. Only skip
+        // this if literally no move was evaluated yet this depth (e.g. time ran
+        // out immediately), in which case the previous depth's result is kept.
+        if(localBest.from || localBest.to){
+            bestScore = localBestScore;
+            best = localBest;
+            lastScore = bestScore;
+        }
         // Aspiration fail-low/high handling: widen window and redo serial root if needed
         bool failLow  = bestScore <= alpha;
         bool failHigh = bestScore >= beta;
