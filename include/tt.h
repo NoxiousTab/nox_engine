@@ -11,7 +11,9 @@ enum class Bound : uint8_t { Exact=0, Lower=1, Upper=2 };
 
 struct TTEntry {
     uint64_t key{0};
-    int16_t score{0};
+    int32_t score{0}; // widened from int16_t: mate scores reach +/-100000,
+                       // which overflowed int16_t (max +/-32767) and wrapped
+                       // into garbage values on store.
     int8_t depth{0};
     uint8_t bound{0};
     Move best{};
@@ -37,10 +39,18 @@ public:
         if(e.key == key){ out = e; return true; }
         return false;
     }
+    void clear(){
+        // Wipes all entries in place without touching the configured size
+        // (unlike resizeMB, which also reallocates). Needed on "ucinewgame":
+        // otherwise stale entries from a completely different, earlier
+        // position/game keep being probed and trusted for the new one.
+        std::lock_guard<std::mutex> lock(mtx);
+        table.assign(table.size(), TTEntry{});
+    }
     void store(uint64_t key, int depth, int score, Bound bnd, const Move& best){
         if(table.empty()) return;
         std::lock_guard<std::mutex> lock(mtx);
-        TTEntry e; e.key=key; e.depth=(int8_t)depth; e.score=(int16_t)score; e.bound=(uint8_t)bnd; e.best=best;
+        TTEntry e; e.key=key; e.depth=(int8_t)depth; e.score=(int32_t)score; e.bound=(uint8_t)bnd; e.best=best;
         TTEntry& dst = ref(key);
         // replace if deeper or empty
         if(dst.key==0 || depth >= dst.depth) dst = e;

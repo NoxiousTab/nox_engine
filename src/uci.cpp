@@ -109,6 +109,12 @@ void UCI::loop(){
         } else if(line == "ucinewgame"){
             stopAndJoinSearch();
             board.setStartPos();
+            searcher.clearForNewGame(); // TT/killers/history must not leak
+                                        // between unrelated games/positions --
+                                        // this is the standard point a UCI
+                                        // GUI (or a test harness reusing one
+                                        // process across many positions) signals
+                                        // "forget everything, this is new"
         } else if(line.rfind("position",0)==0){
             stopAndJoinSearch();
             cmdPosition(line);

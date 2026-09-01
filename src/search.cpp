@@ -27,6 +27,29 @@ static int pieceVal(char p) {
     }
 }
 
+// Mate scores are computed as +/-(MATE_VALUE - ply), where "ply" is distance
+// from the root of the current search call. That makes them correct to
+// report at the root, but unsafe to drop into the TT as-is: a transposition
+// can reach the identical position at a *different* ply-from-root, and
+// reusing a root-relative mate score there would misreport the mate
+// distance (or corrupt alpha/beta comparisons) at that node. Standard fix:
+// strip the root-relative ply out before storing (leaving a ply-independent
+// "distance from this node" value), then re-add the CURRENT node's ply on
+// retrieval to re-root it correctly.
+static constexpr int MATE_VALUE = 100000;
+static constexpr int MATE_THRESHOLD = MATE_VALUE - 1000; // generous margin over any realistic search ply
+
+static int valueToTT(int v, int ply){
+    if(v >= MATE_THRESHOLD) return v + ply;
+    if(v <= -MATE_THRESHOLD) return v - ply;
+    return v;
+}
+static int valueFromTT(int v, int ply){
+    if(v >= MATE_THRESHOLD) return v - ply;
+    if(v <= -MATE_THRESHOLD) return v + ply;
+    return v;
+}
+
 static std::string moveToUciPV(const Move& m) {
     std::string s = sqToCoord(m.from) + sqToCoord(m.to);
     if ((m.flags & PROMOTION) && m.promo) s += (char)std::tolower(m.promo);
@@ -70,6 +93,12 @@ static int mvv_lva(const Board& b, const Move& m) {
     return cap*10 - att;
 }
 
+void Searcher::clearForNewGame(){
+    tt.clear();
+    killers = {};
+    history = {};
+}
+
 SearchResult Searcher::search(Board& b, int timeMs){
     stop = false;
     nodes = 0;
@@ -87,6 +116,17 @@ SearchResult Searcher::search(Board& b, int timeMs){
         int window = 30; // cp
         int alpha = std::max(alphaRoot, lastScore - window);
         int beta  = std::min(betaRoot, lastScore + window);
+        // `alpha` above is mutated in place by the worker loop below (it
+        // doubles as "the aspiration lower bound" AND "the best score found
+        // so far", raised as moves are searched). The fail-low/fail-high
+        // check after the loop needs the ORIGINAL, unmutated aspiration
+        // bounds -- comparing against the mutated `alpha` means bestScore
+        // <= alpha is satisfied by construction (alpha gets raised TO
+        // bestScore), so failLow fired on essentially every iteration,
+        // forcing a redundant full-width serial re-search every single
+        // depth regardless of whether the fast aspiration pass actually
+        // failed.
+        const int aspAlpha = alpha, aspBeta = beta;
         // Root move generation and ordering
         auto moves = b.generateLegalMoves();
         if(moves.empty()){
@@ -126,6 +166,16 @@ SearchResult Searcher::search(Board& b, int timeMs){
                     aSnap = alpha;
                 }
                 int score = -searchRec(tb, nextDepth, -beta, -aSnap, 1);
+                if(stop || timeUpLocal()){
+                    // searchRec bails out mid-recursion by returning a bare 0
+                    // once the clock runs out -- that 0 is not a real
+                    // evaluation of this move, just an abort signal. Trusting
+                    // it here would let a truncated, meaningless score
+                    // compete against (and often beat, since localBestScore
+                    // starts very negative) the fully-searched moves from
+                    // this same iteration or previous depths. Discard it.
+                    break;
+                }
                 std::lock_guard<std::mutex> lock(mtx);
                 if(score > localBestScore){ localBestScore = score; localBest = m; }
                 if(score > alpha){ alpha = score; }
@@ -153,8 +203,8 @@ SearchResult Searcher::search(Board& b, int timeMs){
             lastScore = bestScore;
         }
         // Aspiration fail-low/high handling: widen window and redo serial root if needed
-        bool failLow  = bestScore <= alpha;
-        bool failHigh = bestScore >= beta;
+        bool failLow  = bestScore <= aspAlpha;
+        bool failHigh = bestScore >= aspBeta;
         if((failLow || failHigh) && !stop && !timeUpLocal()){
             int widen = failHigh ? 200 : 200; // widen both sides generously
             int a2 = -10000000, b2 = 10000000;
@@ -173,11 +223,26 @@ SearchResult Searcher::search(Board& b, int timeMs){
                     score = -searchRec(tb, nextDepth, -a2-1, -a2, 1);
                     if(score > a2 && !stop){ score = -searchRec(tb, nextDepth, -b2, -a2, 1); }
                 }
+                // Same abort-signal issue as the parallel worker above: if the
+                // clock ran out inside searchRec, `score` is a meaningless 0,
+                // not a real evaluation. Don't let it compete for best2/bs2.
+                if(stop || timeUpLocal()) break;
                 if(score > bs2){ bs2 = score; best2 = m; }
                 if(score > a2){ a2 = score; best2 = m; }
                 if(a2 >= b2) break;
             }
             if(best2.from||best2.to){ best = best2; bestScore = bs2; lastScore = bs2; }
+        }
+        // searchRec() populates the TT for every node it visits at ply>=1,
+        // but the root's own move loop above lives entirely in local
+        // variables and never writes the root position itself into the TT.
+        // buildPV() below walks the PV by repeatedly probing the TT starting
+        // from the CURRENT position, so without this store its very first
+        // probe (on the root) misses and the PV comes back empty every time,
+        // regardless of search depth or time pressure.
+        if(best.from || best.to){
+            uint64_t keyRootStore = b.positionKey();
+            tt.store(keyRootStore, depth, valueToTT(bestScore, 0), Bound::Exact, best);
         }
         auto now = std::chrono::steady_clock::now();
         int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now-start).count();
@@ -211,10 +276,11 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
     uint64_t key = b.positionKey();
     TTEntry e{};
     if(tt.probe(key, e) && e.depth >= depth){
-        if(e.bound == (uint8_t)Bound::Exact) return e.score;
-        if(e.bound == (uint8_t)Bound::Lower && e.score > alpha) alpha = e.score;
-        else if(e.bound == (uint8_t)Bound::Upper && e.score < beta) beta = e.score;
-        if(alpha >= beta) return e.score;
+        int ttScore = valueFromTT(e.score, ply);
+        if(e.bound == (uint8_t)Bound::Exact) return ttScore;
+        if(e.bound == (uint8_t)Bound::Lower && ttScore > alpha) alpha = ttScore;
+        else if(e.bound == (uint8_t)Bound::Upper && ttScore < beta) beta = ttScore;
+        if(alpha >= beta) return ttScore;
     }
 
     // Null-move pruning: skip when in check
@@ -248,7 +314,7 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
         std::lock_guard<std::mutex> lk(khMutex);
         killer0 = killers[ply][0];
         killer1 = killers[ply][1];
-        for(size_t i=0;i<moves.size();++i) histSnapshot[i] = history[sideIdx][moves[i].from & 63];
+        for(size_t i=0;i<moves.size();++i) histSnapshot[i] = history[sideIdx][moves[i].from & 63][moves[i].to & 63];
     }
     std::vector<std::pair<int,Move>> scored; scored.reserve(moves.size());
     for(size_t i=0;i<moves.size();++i){
@@ -316,10 +382,10 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
                 killers[ply][1] = killers[ply][0];
                 killers[ply][0] = m;
                 int sideIdx = (b.st.side=='w')?1:0; // just switched back
-                history[sideIdx][m.from & 63] += depth * depth;
+                history[sideIdx][m.from & 63][m.to & 63] += depth * depth;
             }
             if(tt.probe(key, e)){} // no-op
-            tt.store(key, depth, beta, Bound::Lower, m);
+            tt.store(key, depth, valueToTT(beta, ply), Bound::Lower, m);
             return beta;
         }
         if(score > bestScore){ bestScore = score; best = m; }
@@ -327,7 +393,7 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
         moveIndex++;
     }
     Bound bnd = (alpha <= origAlpha) ? Bound::Upper : (alpha >= beta ? Bound::Lower : Bound::Exact);
-    tt.store(key, depth, alpha, bnd, best);
+    tt.store(key, depth, valueToTT(alpha, ply), bnd, best);
     return alpha;
 }
 
