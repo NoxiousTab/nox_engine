@@ -13,6 +13,7 @@ add_library(engine
     src/zobrist.cpp
     src/nnue.cpp
     src/bitboard.cpp
+    src/bboard.cpp
 )
 
 target_include_directories(engine PUBLIC include)
@@ -26,6 +27,8 @@ target_link_libraries(nox_engine PRIVATE engine)
 # bitboard.cpp attack tables/magic bitboards in isolation, independent of
 # the rest of the engine, which still runs on the mailbox Board for now.
 add_executable(bitboard_validate tools_bitboard_validate.cpp)
+add_executable(bboard_validate tools_bboard_validate.cpp)
+target_link_libraries(bboard_validate PRIVATE engine)
 target_link_libraries(bitboard_validate PRIVATE engine)
 
 # Optimize defaults for release
@@ -37,4 +40,5 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(engine PRIVATE -O3 -Wall -Wextra -Wpedantic)
   target_compile_options(nox_engine PRIVATE -O3 -Wall -Wextra -Wpedantic)
   target_compile_options(bitboard_validate PRIVATE -O3 -Wall -Wextra -Wpedantic)
+  target_compile_options(bboard_validate PRIVATE -O3 -Wall -Wextra -Wpedantic)
 endif()

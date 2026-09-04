@@ -51,7 +51,7 @@ bool UCI::tryBookMove(Move& out){
 
 void UCI::loop(){
     // one-time init
-    searcher.tt.resizeMB(16);
+    searcher.tt.resizeMB(128);
     board.setStartPos();
 
     std::string line;
@@ -64,7 +64,7 @@ void UCI::loop(){
             std::cout << "id author Ahmed Tabish" << std::endl;
             std::cout << "option name Skill Level type spin default 10 min 1 max 20" << std::endl;
             std::cout << "option name Debug type check default false" << std::endl;
-            std::cout << "option name Hash type spin default 16 min 1 max 4096" << std::endl;
+            std::cout << "option name Hash type spin default 128 min 1 max 4096" << std::endl;
             std::cout << "option name Contempt type spin default 0 min -200 max 200" << std::endl;
             std::cout << "option name Threads type spin default 1 min 1 max 64" << std::endl;
             std::cout << "option name UseBook type check default true" << std::endl;
