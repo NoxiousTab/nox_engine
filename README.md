@@ -6,18 +6,18 @@ GitHub → [github.com/NoxiousTab/nox_engine](https://github.com/NoxiousTab/nox_
 
 ---
 
-## 🚀 Features
+##  Features
 
-- ⚙️ **UCI-compatible** chess engine
-- 🧠 **Bitboard architecture** for efficient board representation
-- 🔁 **Minimax with Alpha-Beta Pruning** for optimal move search
-- 🧮 **NNUE evaluation** integrated for modern position analysis
-- 📦 **FEN support** for position loading and game state tracking
-- 🔎 Legal move generation, check detection, captures, promotions
+-  **UCI-compatible** chess engine
+-  **Bitboard architecture** for efficient board representation
+-  **Minimax with Alpha-Beta Pruning** for optimal move search
+-  **NNUE evaluation** integrated for modern position analysis
+-  **FEN support** for position loading and game state tracking
+-  Legal move generation, check detection, captures, promotions
 
 ---
 
-## 🧩 Engine Architecture
+## Engine Architecture
 
 - 12 Bitboards (one per piece type & color) track board state efficiently.
 - Move generation includes sliding attacks, castling, en passant, and promotions.
@@ -25,7 +25,7 @@ GitHub → [github.com/NoxiousTab/nox_engine](https://github.com/NoxiousTab/nox_
 
 ---
 
-## 🧠 Core Concepts
+## Core Concepts
 
 - **Bitboards**: Each piece type is tracked on a 64-bit int; enables fast shifts & masks.
 - **Move Generation**: Pseudo-legal moves generated using precomputed tables.
@@ -35,10 +35,10 @@ GitHub → [github.com/NoxiousTab/nox_engine](https://github.com/NoxiousTab/nox_
 
 ---
 
-## 📈 Performance
+##  Performance
 
 - Processes ~10,000 positions/sec on a modern CPU
-- Evaluates with NNUE-backed scoring at ~2600 ELO (estimated by self-play)
+- Evaluates with NNUE-backed scoring at ~1600 ELO (estimated by self-play)
 - Modular architecture supports adding:
   - Quiescence Search
   - Transposition Tables
@@ -46,7 +46,7 @@ GitHub → [github.com/NoxiousTab/nox_engine](https://github.com/NoxiousTab/nox_
 
 ---
 
-## 📌 Why This Project Matters
+## Why This Project Matters
 
 This project reflects deep understanding of:
 
@@ -57,12 +57,12 @@ This project reflects deep understanding of:
 
 ---
 
-## ✅ Future Enhancements
+## Future Enhancements
 
-- ♻️ Quiescence Search & Iterative Deepening
-- 🧵 Multi-threaded search with thread pools
-- 📦 Transposition tables and Zobrist hashing
-- 🧠 Custom trained NNUE model for evaluations
+- Quiescence Search & Iterative Deepening
+- Multi-threaded search with thread pools
+- Transposition tables and Zobrist hashing
+- Custom trained NNUE model for evaluations
 
 ---
 
