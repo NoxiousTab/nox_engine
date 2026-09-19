@@ -301,6 +301,7 @@ jobs:
           import sys
 
           pgn_file = os.environ["PGN_FILE"]
+          engine_name = os.environ["ENGINE_NAME"]
 
           if not os.path.isfile(pgn_file):
               print("ERROR: PGN file was not created.")
@@ -309,15 +310,45 @@ jobs:
           with open(pgn_file, encoding="utf-8") as f:
               pgn = f.read()
 
-          results = re.findall(
-              r'^\[Result\s+"(1-0|0-1|1/2-1/2)"\]',
-              pgn,
-              re.MULTILINE
-          )
+          games = re.split(r'\n\s*\n(?=\[Event )', pgn)
 
-          wins = results.count("1-0")
-          losses = results.count("0-1")
-          draws = results.count("1/2-1/2")
+          wins = 0
+          draws = 0
+          losses = 0
+
+          for game in games:
+              white_match = re.search(r'^\[White\s+"([^"]+)"\]', game, re.MULTILINE)
+              black_match = re.search(r'^\[Black\s+"([^"]+)"\]', game, re.MULTILINE)
+              result_match = re.search(
+                  r'^\[Result\s+"(1-0|0-1|1/2-1/2)"\]',
+                  game,
+                  re.MULTILINE
+              )
+
+              if not white_match or not black_match or not result_match:
+                  continue
+
+              white = white_match.group(1)
+              black = black_match.group(1)
+              result = result_match.group(1)
+
+              if result == "1/2-1/2":
+                  draws += 1
+              elif white == engine_name:
+                  if result == "1-0":
+                      wins += 1
+                  else:
+                      losses += 1
+              elif black == engine_name:
+                  if result == "0-1":
+                      wins += 1
+                  else:
+                      losses += 1
+              else:
+                  print(f"WARNING: {engine_name} not found in game.")
+                  print(f"White: {white}")
+                  print(f"Black: {black}")
+                  print(f"Result: {result}")
 
           total = wins + draws + losses
 
@@ -344,6 +375,7 @@ jobs:
               f.write(f"losses={losses}\n")
               f.write(f"games={total}\n")
               f.write(f"score={score:.1f}\n")
+
           PY
 
       # ------------------------------------------------------------
