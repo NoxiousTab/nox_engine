@@ -185,37 +185,19 @@ jobs:
           for asset in assets:
               print("  " + asset["name"])
 
-          candidates = []
+          target = "stockfish-linux-x86-64-universal.tar.gz"
 
-          for asset in assets:
-              name = asset["name"].lower()
+          matches = [
+              asset for asset in assets
+              if asset["name"].lower() == target
+          ]
 
-              if (
-                  "ubuntu" in name
-                  and "x86-64" in name
-                  and "avx2" in name
-                  and name.endswith((".tar", ".tar.gz"))
-              ):
-                  candidates.append(asset)
-
-          # Fall back to any Ubuntu x86-64 binary if AVX2 isn't found.
-          if not candidates:
-              for asset in assets:
-                  name = asset["name"].lower()
-
-                  if (
-                      "ubuntu" in name
-                      and "x86-64" in name
-                      and name.endswith((".tar", ".tar.gz"))
-                  ):
-                      candidates.append(asset)
-
-          if not candidates:
+          if not matches:
               print()
-              print("ERROR: Could not find a compatible Stockfish binary.")
+              print(f"ERROR: Could not find {target}")
               sys.exit(1)
 
-          asset = candidates[0]
+          asset = matches[0]
 
           print()
           print("Selected Stockfish asset:")
@@ -247,6 +229,7 @@ jobs:
           if [ -z "$STOCKFISH_BIN" ]; then
             echo
             echo "ERROR: Stockfish executable not found."
+            find stockfish_extract -type f
             exit 1
           fi
 
