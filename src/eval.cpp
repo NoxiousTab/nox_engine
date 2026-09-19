@@ -1,7 +1,10 @@
 #include "eval.h"
 #include <array>
-#include <cctype>
 #include "nnue.h"
+#include "board.h" // now only for the NNUE bridge (NNUE::evaluate() still takes
+                    // a mailbox Board&, see below) -- pseudoMobility no longer
+                    // needs Board's static geometry helpers, now that it's
+                    // bitboard-native
 
 namespace eng {
 
@@ -95,65 +98,53 @@ static int pst(char p, int sq){
 
 // Cheap "pseudo-legal" mobility count for one side. This deliberately does
 // NOT verify that a candidate move leaves the moving side's own king safe -
-// that legality check is exactly what makes Board::generateLegalMoves()
-// expensive (it simulates every candidate move via makeMove/unmakeMove and
+// that legality check is exactly what BBoard::generateLegalMoves() spends
+// its time on (it simulates every candidate move via makeMove/unmakeMove and
 // re-runs check detection each time). As a positional mobility *heuristic*
-// we don't need that guarantee, just a reasonable proxy for how much
-// scope each side's pieces have, so we walk the same geometry using the
-// already-shared, already-bug-fixed Board::inKnightBounds/slideOk/
-// kingStepOk static helpers directly against the board array. Pawns are
-// intentionally excluded, matching common practice for this kind of metric.
-static int pseudoMobility(const Board& b, char side){
-    static const int KNIGHT_D[8] = {-17,-15,-10,-6,6,10,15,17};
-    static const int BISHOP_D[4] = {-9,-7,7,9};
-    static const int ROOK_D[4]   = {-8,-1,1,8};
-    static const int KING_D[8]   = {-9,-8,-7,-1,1,7,8,9};
-    const auto& brd = b.st.board;
+// we don't need that guarantee, just a reasonable proxy for how much scope
+// each side's pieces have.
+//
+// Bitboard-native: for knights/king, KNIGHT_ATTACKS[s]/KING_ATTACKS[s]
+// already exclude off-board wraparound (built via explicit file/rank
+// arithmetic in Phase 1), so intersecting with ~ownOcc directly gives the
+// legal-looking target count. For sliders, rookAttacks()/bishopAttacks()
+// (the same Phase-1-validated magic lookups move generation itself uses)
+// already stop at the first blocker in each direction and INCLUDE that
+// blocker square in the raw attack set -- intersecting with ~ownOcc then
+// drops it only when the blocker is a friendly piece, keeping it when it's
+// an enemy one (a capture), which is exactly the walk-and-count-until-
+// blocked behavior the old per-square loop implemented by hand.
+static int pseudoMobility(const BBoard& b, char side){
+    bool white = (side == 'w');
+    Bitboard ownOcc = white ? b.st.occWhite : b.st.occBlack;
+    Bitboard occAll = b.st.occAll;
+
     int count = 0;
-    for(int s=0; s<64; ++s){
-        char p = brd[s];
-        if(p=='.' || Board::colorOf(p) != side) continue;
-        char up = (char)std::toupper((unsigned char)p);
-        if(up=='N'){
-            for(int d : KNIGHT_D){
-                int to = s+d;
-                if(!Board::inKnightBounds(s,to)) continue;
-                char q = brd[to];
-                if(q=='.' || Board::colorOf(q)!=side) count++;
-            }
-        } else if(up=='B' || up=='R' || up=='Q'){
-            auto walk=[&](const int* dirs, int n){
-                for(int i=0;i<n;i++){
-                    int d = dirs[i];
-                    int to = s+d;
-                    while(Board::inBounds(to) && Board::slideOk(s,to,d)){
-                        char q = brd[to];
-                        if(q=='.'){ count++; }
-                        else { if(Board::colorOf(q)!=side) count++; break; }
-                        to += d;
-                    }
-                }
-            };
-            if(up=='B') walk(BISHOP_D,4);
-            else if(up=='R') walk(ROOK_D,4);
-            else { walk(BISHOP_D,4); walk(ROOK_D,4); }
-        } else if(up=='K'){
-            for(int d : KING_D){
-                int to = s+d;
-                if(!Board::kingStepOk(s,to)) continue;
-                char q = brd[to];
-                if(q=='.' || Board::colorOf(q)!=side) count++;
-            }
-        }
-    }
+    Bitboard bb = white ? b.st.pieces[WN] : b.st.pieces[BN];
+    while(bb){ int s = popLsb(bb); count += popcount(KNIGHT_ATTACKS[s] & ~ownOcc); }
+    bb = white ? b.st.pieces[WB] : b.st.pieces[BB];
+    while(bb){ int s = popLsb(bb); count += popcount(bishopAttacks(s, occAll) & ~ownOcc); }
+    bb = white ? b.st.pieces[WR] : b.st.pieces[BR];
+    while(bb){ int s = popLsb(bb); count += popcount(rookAttacks(s, occAll) & ~ownOcc); }
+    bb = white ? b.st.pieces[WQ] : b.st.pieces[BQ];
+    while(bb){ int s = popLsb(bb); count += popcount((bishopAttacks(s, occAll) | rookAttacks(s, occAll)) & ~ownOcc); }
+    Bitboard king = white ? b.st.pieces[WK] : b.st.pieces[BK];
+    if(king){ int s = lsbIndex(king); count += popcount(KING_ATTACKS[s] & ~ownOcc); }
     return count;
 }
 
-int Eval::evaluate(const Board& b){
+int Eval::evaluate(const BBoard& b){
     if(NNUE::isEnabled() && NNUE::isReady()){
-        return NNUE::evaluate(b);
+        // NNUE::evaluate() still takes a mailbox Board& (it's disabled by
+        // default and explicitly out of scope for this rewrite -- see the
+        // Phase 3 design note). Bridge via a FEN round-trip, exactly like
+        // BBoard::see() bridges to Board::see(): cheap relative to the NNUE
+        // feature-build pass this is about to run anyway, and only pays
+        // that cost at all when NNUE is explicitly enabled.
+        Board tmp; tmp.setFEN(b.getFEN());
+        return NNUE::evaluate(tmp);
     }
-    const auto& brd = b.st.board;
+    const auto brd = b.flatChars();
     int score=0;
     int wB=0,bB=0,wR=0,bR=0; // counts for bishop pair and rook features
     // base material + PST
@@ -165,34 +156,48 @@ int Eval::evaluate(const Board& b){
         else if(p=='R') wR++; else if(p=='r') bR++;
     }
 
-    // pawn structure
+    // pawn structure -- bitboard-native: doubled/isolated/passed pawn checks
+    // via popcount and file/rank bitmasks instead of scanning the flat
+    // 64-char array. fileOf/rankOf stay in use by the king-safety and
+    // rook-features sections below, which still read `brd`.
     auto fileOf = [](int sq){ return sq%8; };
     auto rankOf = [](int sq){ return sq/8; };
-    // track pawns by files
-    int wpawnFile[8] = {0}, bpawnFile[8] = {0};
-    for(int i=0;i<64;i++){
-        if(brd[i]=='P') wpawnFile[fileOf(i)]++;
-        else if(brd[i]=='p') bpawnFile[fileOf(i)]++;
+    auto fileMask = [](int f) -> Bitboard { return 0x0101010101010101ULL << f; };
+    auto aheadMaskWhite = [](int r) -> Bitboard { return (r + 1 < 8) ? (~0ULL << ((r + 1) * 8)) : 0ULL; };
+    auto aheadMaskBlack = [](int r) -> Bitboard { return (r > 0) ? ((1ULL << (r * 8)) - 1) : 0ULL; };
+    auto adjFilesMask = [&](int f) -> Bitboard {
+        Bitboard m = fileMask(f);
+        if (f > 0) m |= fileMask(f - 1);
+        if (f < 7) m |= fileMask(f + 1);
+        return m;
+    };
+
+    Bitboard wp = b.st.pieces[WP], bp = b.st.pieces[BP];
+    int wpawnFile[8], bpawnFile[8];
+    for (int f = 0; f < 8; ++f) {
+        wpawnFile[f] = popcount(wp & fileMask(f));
+        bpawnFile[f] = popcount(bp & fileMask(f));
     }
-    for(int i=0;i<64;i++){
-        char p = brd[i]; if(p!='P' && p!='p') continue;
-        int f=fileOf(i), r=rankOf(i);
-        bool white = (p=='P');
-        // doubled
-        if(white && wpawnFile[f]>1) score -= 10;
-        if(!white && bpawnFile[f]>1) score += 10;
-        // isolated
-        bool hasAdjSame = false;
-        for(int df=-1; df<=1; df+=2){ int nf=f+df; if(nf<0||nf>7) continue; if(white){ if(wpawnFile[nf]>0) hasAdjSame=true; } else { if(bpawnFile[nf]>0) hasAdjSame=true; } }
-        if(!hasAdjSame){ if(white) score -= 15; else score += 15; }
-        // passed pawn
-        bool passed = true;
-        for(int df=-1; df<=1; ++df){ int nf=f+df; if(nf<0||nf>7) continue; if(white){
-                for(int rr=r+1; rr<8; ++rr){ if(brd[rr*8+nf]=='p'){ passed=false; break; } } }
-            else { for(int rr=r-1; rr>=0; --rr){ if(brd[rr*8+nf]=='P'){ passed=false; break; } } }
-            if(!passed) break;
-        }
-        if(passed){ if(white) score += 20 + r*2; else score -= 20 + (7-r)*2; }
+
+    Bitboard bb = wp;
+    while (bb) {
+        int i = popLsb(bb);
+        int f = fileOf(i), r = rankOf(i);
+        if (wpawnFile[f] > 1) score -= 10; // doubled
+        bool hasAdjSame = (f > 0 && wpawnFile[f - 1] > 0) || (f < 7 && wpawnFile[f + 1] > 0);
+        if (!hasAdjSame) score -= 15; // isolated
+        bool passed = (bp & adjFilesMask(f) & aheadMaskWhite(r)) == 0;
+        if (passed) score += 20 + r * 2;
+    }
+    bb = bp;
+    while (bb) {
+        int i = popLsb(bb);
+        int f = fileOf(i), r = rankOf(i);
+        if (bpawnFile[f] > 1) score += 10;
+        bool hasAdjSame = (f > 0 && bpawnFile[f - 1] > 0) || (f < 7 && bpawnFile[f + 1] > 0);
+        if (!hasAdjSame) score += 15;
+        bool passed = (wp & adjFilesMask(f) & aheadMaskBlack(r)) == 0;
+        if (passed) score -= 20 + (7 - r) * 2;
     }
 
     // mobility: cheap pseudo-legal proxy (see pseudoMobility above) instead
@@ -203,9 +208,12 @@ int Eval::evaluate(const Board& b){
     {
         int wmob = pseudoMobility(b, 'w');
         int bmob = pseudoMobility(b, 'b');
-        // phase scaling: more weight in middlegame
-        int phase=0; // 0..24 approx by non-pawn material
-        for(int i=0;i<64;i++){ char p=brd[i]; switch(p){ case 'N':case 'n': case 'B':case 'b': phase+=1; break; case 'R':case 'r': phase+=2; break; case 'Q':case 'q': phase+=4; break; default: break; } }
+        // phase scaling: more weight in middlegame, via popcount instead of
+        // a 64-square scan
+        int phase = popcount(b.st.pieces[WN]) + popcount(b.st.pieces[BN])
+                  + popcount(b.st.pieces[WB]) + popcount(b.st.pieces[BB])
+                  + 2 * (popcount(b.st.pieces[WR]) + popcount(b.st.pieces[BR]))
+                  + 4 * (popcount(b.st.pieces[WQ]) + popcount(b.st.pieces[BQ]));
         if(phase>24) phase=24;
         int mobWeight = 1 + phase/8; // 1..4
         score += (wmob - bmob) * mobWeight;

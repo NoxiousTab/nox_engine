@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cassert>
 #include "zobrist.h"
+#include "board.h"
 
 namespace eng {
 
@@ -87,12 +88,15 @@ void BBoard::setFEN(const std::string& fen) {
     st.zobristKey = recomputeKeyFromScratch();
 }
 
-std::string BBoard::getFEN() const {
-    // Rebuild a flat 64-char occupancy view from the bitboards purely for
-    // string formatting -- this is the one place it's convenient to think
-    // in "one char per square" terms, matching the mailbox Board's getFEN()
-    // output format exactly so both representations are interchangeable at
-    // the UCI/FEN boundary.
+char BBoard::pieceCharAt(int sq) const {
+    Bitboard bit = sqBit(sq);
+    for (int idx = 0; idx < 12; ++idx) {
+        if (st.pieces[idx] & bit) return charOfPieceIndex(idx);
+    }
+    return '.';
+}
+
+std::array<char, 64> BBoard::flatChars() const {
     std::array<char, 64> flat;
     flat.fill('.');
     for (int idx = 0; idx < 12; ++idx) {
@@ -102,6 +106,16 @@ std::string BBoard::getFEN() const {
             flat[sq] = charOfPieceIndex(idx);
         }
     }
+    return flat;
+}
+
+std::string BBoard::getFEN() const {
+    // Reuses flatChars() (the same per-square lookup pieceCharAt()/eval.cpp's
+    // bridge use) purely for string formatting -- this is the one place it's
+    // convenient to think in "one char per square" terms, matching the
+    // mailbox Board's getFEN() output format exactly so both representations
+    // are interchangeable at the UCI/FEN boundary.
+    std::array<char, 64> flat = flatChars();
 
     std::string rows;
     for (int r = 7; r >= 0; --r) {
@@ -470,6 +484,71 @@ std::vector<Move> BBoard::generateLegalMoves() {
         }
     }
     return legal;
+}
+
+std::vector<Move> BBoard::generateCaptures() {
+    // Same "loud move" set the mailbox Board's generateCaptures() returns:
+    // captures, en passant, and promotions -- including non-capturing
+    // promotions, which is why this checks PROMOTION separately from
+    // CAPTURE/EN_PASSANT rather than requiring CAPTURE to be set.
+    std::vector<Move> pseudo = generatePseudoLegalMoves();
+    std::vector<Move> legal;
+    legal.reserve(pseudo.size());
+    for (const auto& m : pseudo) {
+        if (!(m.flags & (CAPTURE | EN_PASSANT | PROMOTION))) continue;
+        if (makeMove(m)) {
+            legal.push_back(m);
+            unmakeMove();
+        }
+    }
+    return legal;
+}
+
+bool BBoard::makeNullMove() {
+    bool white = (st.side == 'w');
+    int ksq = white ? st.wk : st.bk;
+    char enemySide = white ? 'b' : 'w';
+    if (squareAttacked(ksq, enemySide)) return false;
+
+    BBUndo u;
+    u.prevState = st;
+    stack.push_back(u);
+
+    if (st.ep != -1) st.zobristKey ^= Zobrist::epFile[st.ep % 8];
+    st.ep = -1;
+
+    if (!white) st.fullmove++;
+    st.side = white ? 'b' : 'w';
+    st.zobristKey ^= Zobrist::side;
+    st.halfmove++; // per convention, matching the mailbox Board
+
+    return true;
+}
+
+void BBoard::unmakeNullMove() {
+    assert(!stack.empty() && "unmakeNullMove() called with an empty undo stack");
+    st = stack.back().prevState;
+    stack.pop_back();
+}
+
+int BBoard::repetitionCount() const {
+    int count = 1; // current position
+    uint64_t cur = st.zobristKey;
+    int hm = st.halfmove;
+    for (int i = static_cast<int>(stack.size()) - 1; i >= 0 && hm > 0; --i) {
+        if (stack[i].prevState.zobristKey == cur) count++;
+        hm--;
+    }
+    return count;
+}
+
+int BBoard::see(const Move& m) const {
+    // Bridges to the mailbox Board's own already-verified see() (73/73 on
+    // tests/see_test.py) via a FEN round-trip -- see the Phase 3 step 1
+    // design note in bboard.h for why this reuses rather than reimplements.
+    Board tmp;
+    tmp.setFEN(getFEN());
+    return tmp.see(m);
 }
 
 }

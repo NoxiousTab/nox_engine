@@ -139,6 +139,48 @@ public:
     // exactly where it started).
     std::vector<Move> generateLegalMoves();
 
+        // Same idea as generateLegalMoves(), but restricted to captures,
+    // en passant, and promotions (including non-capturing promotions) --
+    // i.e. exactly the "loud" move set the mailbox Board's
+    // generateCaptures() returns, for quiescence search.
+    std::vector<Move> generateCaptures();
+
+    // "Passes" the move to the opponent without moving a piece, for null-
+    // move pruning. Returns false (no state change) if the side to move is
+    // currently in check, matching the mailbox Board's same safety rule --
+    // it's unsound to null-move out of check.
+    bool makeNullMove();
+    void unmakeNullMove();
+
+    // Occurrences of the CURRENT position among the last st.halfmove plies
+    // of history (including the current position itself, so a genuinely
+    // fresh position returns 1). Mirrors the mailbox Board's algorithm
+    // exactly, just reading BBUndo::prevState.zobristKey (already stored
+    // for every prior ply) in place of a separately-tracked keyBefore field.
+    int repetitionCount() const;
+
+    // Bridge accessors for callers (mvv_lva move ordering, quiescence delta
+    // pruning) that just want "what piece, if any, sits on this square" --
+    // the same information the mailbox Board's `st.board[sq]` array access
+    // gives directly. O(12) per call (checks each piece bitboard), same
+    // cost class as the equivalent lookups makeMove() already does.
+    char pieceCharAt(int sq) const;
+
+    // Full 64-char board snapshot, one call's worth of the same O(12)-per-
+    // square work pieceCharAt() does. Used by getFEN() and by eval.cpp's
+    // bridge to reuse its existing, already-tuned, array-based logic
+    // unchanged during Phase 3 step 2 -- mobility/pawn-structure get their
+    // own bitboard-native rewrite as a separate, explicitly measured step.
+    std::array<char, 64> flatChars() const;
+
+    // Static exchange evaluation, bridged to the mailbox Board's own
+    // already-verified see() (see tests/see_test.py, 73/73 passing) via a
+    // FEN round-trip rather than a fresh bitboard-native reimplementation --
+    // see the Phase 3 step 1 design note for why. Costs one FEN round-trip
+    // per call; called during move ordering/pruning, not per search node.
+    int see(const Move& m) const;
+
+
     // Maps a FEN piece character ('P'..'K','p'..'k') to its PieceIndex.
     // Returns -1 for any other character (e.g. '.', a bug in caller logic).
     static int pieceIndexOf(char c);

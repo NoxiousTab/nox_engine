@@ -56,9 +56,9 @@ static std::string moveToUciPV(const Move& m) {
     return s;
 }
 
-std::string Searcher::buildPV(Board& b, int maxLen) {
+std::string Searcher::buildPV(BBoard& b, int maxLen) {
     std::string out;
-    Board bb = b; // copy
+    BBoard bb = b; // copy
     for (int i = 0; i < maxLen; i++) {
         TTEntry e{};
         uint64_t key = bb.positionKey();
@@ -72,7 +72,7 @@ std::string Searcher::buildPV(Board& b, int maxLen) {
     return out;
 }
 
-bool Searcher::badCaptureHeuristic(const Board& b, const Move& m, int /*stand*/) const {
+bool Searcher::badCaptureHeuristic(const BBoard& b, const Move& m, int /*stand*/) const {
     // A capture is "bad" if the full static exchange evaluation shows it
     // loses material -- this used to be approximated with a shallow one-ply
     // lookahead (a duplicate of the same idea living in three different
@@ -82,8 +82,8 @@ bool Searcher::badCaptureHeuristic(const Board& b, const Move& m, int /*stand*/)
     return b.see(m) < 0;
 }
 
-static int mvv_lva(const Board& b, const Move& m) {
-    const auto& brd = b.st.board;
+static int mvv_lva(const BBoard& b, const Move& m) {
+    const auto& brd = b.flatChars();
     int cap = 0;
     if (m.flags & EN_PASSANT) cap = std::abs(pieceVal('p'));
     else if (m.flags & CAPTURE) cap = std::abs(pieceVal(brd[m.to]));
@@ -99,7 +99,7 @@ void Searcher::clearForNewGame(){
     history = {};
 }
 
-SearchResult Searcher::search(Board& b, int timeMs){
+SearchResult Searcher::search(BBoard& b, int timeMs){
     stop = false;
     nodes = 0;
     auto start = std::chrono::steady_clock::now();
@@ -157,7 +157,7 @@ SearchResult Searcher::search(Board& b, int timeMs){
                 int i = idx.fetch_add(1);
                 if(i >= (int)moves.size() || stop || timeUpLocal()) break;
                 const Move m = moves[i];
-                Board tb = b; // thread-local copy
+                BBoard tb = b; // thread-local copy
                 if(!tb.makeMove(m)) continue;
                 int nextDepth = depth - 1;
                 int aSnap;
@@ -214,7 +214,7 @@ SearchResult Searcher::search(Board& b, int timeMs){
             // Serial re-search with widened window
             for(size_t i=0;i<moves.size() && !stop && !timeUpLocal(); ++i){
                 const Move m = moves[i];
-                Board tb = b;
+                BBoard tb = b;
                 if(!tb.makeMove(m)) continue;
                 int score;
                 int nextDepth = depth - 1;
@@ -261,7 +261,7 @@ SearchResult Searcher::search(Board& b, int timeMs){
     SearchResult res; res.score = bestScore; res.best = best; return res;
 }
 
-int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
+int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
     if(stop || timeUp()) { stop = true; return 0; }
     ++nodes;
     // draw checks
@@ -397,7 +397,7 @@ int Searcher::searchRec(Board& b, int depth, int alpha, int beta, int ply){
     return alpha;
 }
 
-int Searcher::quiesce(Board& b, int alpha, int beta, int ply){
+int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
     if(stop || timeUp()) { stop = true; return alpha; }
     ++nodes;
     // If in check, search all legal evasions (no stand-pat)
@@ -425,7 +425,7 @@ int Searcher::quiesce(Board& b, int alpha, int beta, int ply){
     for(const auto& m: caps){
         // Delta pruning: skip captures that cannot raise alpha enough
         if(m.flags & CAPTURE){
-            char captured = b.st.board[m.to];
+            char captured = b.pieceCharAt(m.to);
             int gain = std::abs(pieceVal(captured));
             if(stand + gain + 50 <= alpha) continue;
         }
@@ -440,7 +440,7 @@ int Searcher::quiesce(Board& b, int alpha, int beta, int ply){
     return alpha;
 }
 
-int Searcher::evalWithContempt(const Board& b) const{
+int Searcher::evalWithContempt(const BBoard& b) const{
     int e = Eval::evaluate(b);
     // If near draw by 50-move or repetition likely, bias by contempt
     if(b.isDrawBy50() || b.repetitionCount() >= 2){

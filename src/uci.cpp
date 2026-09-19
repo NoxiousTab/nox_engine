@@ -12,7 +12,7 @@ static std::string trim(const std::string& s){
     size_t a = s.find_first_not_of(" \t\r\n"); if(a==std::string::npos) return ""; size_t b = s.find_last_not_of(" \t\r\n"); return s.substr(a, b-a+1);
 }
 
-static uint64_t perftRec(Board& b, int depth){
+static uint64_t perftRec(BBoard& b, int depth){
     if(depth==0) return 1ULL;
     uint64_t nodes=0; auto moves=b.generateLegalMoves();
     for(const auto& m: moves){ if(!b.makeMove(m)) continue; nodes += perftRec(b, depth-1); b.unmakeMove(); }
@@ -82,14 +82,16 @@ void UCI::loop(){
         } else if(line.rfind("perft",0)==0){
             stopAndJoinSearch(); // copies `board`, which a search thread may be
                                   // briefly mutating-and-restoring at the root
-            std::istringstream ss(line); std::string w; ss>>w; int d=1; ss>>d; if(d<0) d=0; Board tmp=board; uint64_t n=perftRec(tmp,d); std::cout<<n<<std::endl; std::cout.flush();
+            std::istringstream ss(line); std::string w; ss>>w; int d=1; ss>>d; if(d<0) d=0; BBoard tmp=board; uint64_t n=perftRec(tmp,d); std::cout<<n<<std::endl; std::cout.flush();
         } else if(line.rfind("see ",0)==0){
             // see <uci_move> <fen...>  -- independent of shared board/searcher,
-            // used for testing/validating Board::see() directly.
+            // used for testing/validating BBoard::see() directly (which itself
+            // bridges to the mailbox Board's own already-verified see() via a
+            // FEN round-trip -- see the Phase 3 step 1 design note).
             std::istringstream ss(line); std::string w, moveStr; ss>>w>>moveStr;
             std::string f1,f2,f3,f4,f5,f6; ss>>f1>>f2>>f3>>f4>>f5>>f6;
             std::string fen = f1+" "+f2+" "+f3+" "+f4+" "+f5+" "+f6;
-            Board tmp; tmp.setFEN(fen);
+            BBoard tmp; tmp.setFEN(fen);
             Square from = coordToSq(moveStr.substr(0,2));
             Square to   = coordToSq(moveStr.substr(2,2));
             char promo = 0; if(moveStr.size()>=5){ char c=std::tolower(moveStr[4]); if(c=='q'||c=='r'||c=='b'||c=='n') promo=(tmp.st.side=='w')?std::toupper(c):c; }
@@ -98,13 +100,14 @@ void UCI::loop(){
             for(const auto& mv: moves){ if(mv.from==from && mv.to==to){ if(mv.flags & PROMOTION){ if(promo && mv.promo==promo){ found=mv; break; } else continue; } found=mv; break; } }
             std::cout << tmp.see(found) << std::endl; std::cout.flush();
         } else if(line.rfind("evalfen ",0)==0){
-            // evalfen builds its own independent Board from the given FEN and
+            // evalfen builds its own independent BBoard from the given FEN and
             // never touches the shared `board`/`searcher`, so no guard needed here.
+            // Eval::evaluate() itself now checks NNUE::isEnabled()/isReady()
+            // internally (bridging to NNUE via a FEN round-trip when so), so
+            // this no longer needs to branch on that manually.
             std::string fen = line.substr(8);
-            Board tmp; tmp.setFEN(fen);
-            int score = 0;
-            if (NNUE::isEnabled() && NNUE::isReady()) score = NNUE::evaluate(tmp);
-            else score = Eval::evaluate(tmp);
+            BBoard tmp; tmp.setFEN(fen);
+            int score = Eval::evaluate(tmp);
             std::cout << score << std::endl; std::cout.flush();
         } else if(line == "ucinewgame"){
             stopAndJoinSearch();

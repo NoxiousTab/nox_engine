@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <thread>
-#include "board.h"
+#include "bboard.h"
 #include "search.h"
 
 namespace eng {
@@ -12,7 +12,7 @@ public:
     ~UCI(); // ensures any in-flight search thread is stopped and joined before destruction
 
 private:
-    Board board;
+    BBoard board;
     Searcher searcher;
     bool debug{false};
     int skill{10};
