@@ -127,24 +127,16 @@ jobs:
       # Install Cute Chess
       # ------------------------------------------------------------
 
-      - name: Install Cute Chess
+      - name: Build Cute Chess CLI
         run: |
           set -e
 
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            qt6-base-dev \
-            qt6-svg-dev \
-            qt6-base-dev-tools \
-            qt6-5compat-dev
+          cmake -S cutechess -B cutechess/build \
+            -DCUTECHESS_BUILD_GUI=OFF
 
-          git clone --depth 1 --branch v1.5.1 \
-            https://github.com/cutechess/cutechess.git
-
-          cmake -S cutechess -B cutechess/build
-          cmake --build cutechess/build --parallel
+          cmake --build cutechess/build \
+            --target cutechess-cli \
+            --parallel 2
 
           CUTECHESS_BIN=$(find cutechess/build \
             -type f \
@@ -160,7 +152,9 @@ jobs:
           cp "$CUTECHESS_BIN" ./cutechess-cli
           chmod +x ./cutechess-cli
 
+          echo "Cute Chess CLI:"
           ./cutechess-cli --version
+
 
 
       # ------------------------------------------------------------
