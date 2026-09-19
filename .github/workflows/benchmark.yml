@@ -45,10 +45,18 @@ jobs:
       HISTORY_FILE: benchmarks/history.csv
 
     steps:
-      - name: Checkout
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # Configuration
+      # ------------------------------------------------------------
 
       - name: Set benchmark configuration
         shell: bash
@@ -67,27 +75,40 @@ jobs:
             echo "GAMES=2" >> "$GITHUB_ENV"
           fi
 
-      - name: Install dependencies
+      # ------------------------------------------------------------
+      # Dependencies
+      # ------------------------------------------------------------
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             cmake \
             curl \
             python3 \
-            cutechess-cli
+            python3-pip \
+            wget \
+            tar
 
-      - name: Build engine
+      # ------------------------------------------------------------
+      # Build Nox
+      # ------------------------------------------------------------
+
+      - name: Build Nox engine
         run: |
           chmod +x compile_engine.sh
           ./compile_engine.sh
 
-      - name: Verify engine
+      - name: Verify Nox engine
         run: |
+          set -e
+
           test -x build/nox_engine
           test -f neural_net/noxnet_baseline.nox
 
-          echo "Engine:"
+          echo "Nox executable:"
           ls -lh build/nox_engine
 
           echo
@@ -95,15 +116,67 @@ jobs:
           ls -lh neural_net/noxnet_baseline.nox
 
           echo
-          echo "UCI:"
-          timeout 5s ./build/nox_engine <<EOF
+          echo "Testing UCI..."
+
+          timeout 10s ./build/nox_engine <<EOF
           uci
           quit
           EOF
 
+      # ------------------------------------------------------------
+      # Install Cute Chess
+      # ------------------------------------------------------------
+
+      - name: Install Cute Chess
+        run: |
+          set -e
+
+          echo "Downloading Cute Chess..."
+
+          CUTECHESS_URL="https://github.com/cutechess/cutechess/releases/latest/download/cutechess-cli-linux-x86_64.tar.gz"
+
+          curl -fL \
+            "$CUTECHESS_URL" \
+            -o cutechess.tar.gz
+
+          mkdir -p cutechess
+
+          tar -xzf cutechess.tar.gz -C cutechess
+
+          echo
+          echo "Cute Chess files:"
+          find cutechess -type f -maxdepth 3 -print
+
+          CUTECHESS_BIN=$(find cutechess \
+            -type f \
+            -name "cutechess-cli" \
+            | head -n 1)
+
+          if [ -z "$CUTECHESS_BIN" ]; then
+            echo
+            echo "ERROR: cutechess-cli executable was not found."
+            echo
+            echo "Downloaded archive contents:"
+            find cutechess -type f
+            exit 1
+          fi
+
+          cp "$CUTECHESS_BIN" ./cutechess-cli
+          chmod +x ./cutechess-cli
+
+          echo
+          echo "Cute Chess version:"
+          ./cutechess-cli --version
+
+      # ------------------------------------------------------------
+      # Download Stockfish
+      # ------------------------------------------------------------
+
       - name: Download Stockfish
         run: |
           set -e
+
+          echo "Downloading Stockfish ${STOCKFISH_VERSION}..."
 
           curl -fsSL \
             "https://api.github.com/repos/official-stockfish/Stockfish/releases/tags/${STOCKFISH_VERSION}" \
@@ -118,7 +191,7 @@ jobs:
 
           assets = release.get("assets", [])
 
-          print("Stockfish release assets:")
+          print("Available Stockfish assets:")
           for asset in assets:
               print("  " + asset["name"])
 
@@ -130,20 +203,32 @@ jobs:
               if (
                   "ubuntu" in name
                   and "x86-64" in name
-                  and "universal" in name
+                  and "avx2" in name
                   and name.endswith((".tar", ".tar.gz"))
               ):
                   candidates.append(asset)
 
+          # Fall back to any Ubuntu x86-64 binary if AVX2 isn't found.
+          if not candidates:
+              for asset in assets:
+                  name = asset["name"].lower()
+
+                  if (
+                      "ubuntu" in name
+                      and "x86-64" in name
+                      and name.endswith((".tar", ".tar.gz"))
+                  ):
+                      candidates.append(asset)
+
           if not candidates:
               print()
-              print("ERROR: Could not find the Linux x86-64 universal binary.")
+              print("ERROR: Could not find a compatible Stockfish binary.")
               sys.exit(1)
 
           asset = candidates[0]
 
           print()
-          print("Selected:")
+          print("Selected Stockfish asset:")
           print(asset["name"])
 
           with open("stockfish_url", "w") as f:
@@ -155,7 +240,13 @@ jobs:
             -o stockfish.tar
 
           mkdir -p stockfish_extract
-          tar -xf stockfish.tar -C stockfish_extract
+
+          tar -xf stockfish.tar \
+            -C stockfish_extract
+
+          echo
+          echo "Extracted Stockfish files:"
+          find stockfish_extract -type f -print
 
           STOCKFISH_BIN=$(find stockfish_extract \
             -type f \
@@ -164,8 +255,8 @@ jobs:
             | head -n 1)
 
           if [ -z "$STOCKFISH_BIN" ]; then
+            echo
             echo "ERROR: Stockfish executable not found."
-            find stockfish_extract -type f
             exit 1
           fi
 
@@ -173,13 +264,27 @@ jobs:
           chmod +x ./stockfish
 
           echo
-          echo "Stockfish:"
+          echo "Stockfish executable:"
           ls -lh ./stockfish
+
+          echo
+          echo "Testing Stockfish..."
+
+          timeout 10s ./stockfish <<EOF
+          uci
+          quit
+          EOF
+
+      # ------------------------------------------------------------
+      # Benchmark
+      # ------------------------------------------------------------
 
       - name: Run benchmark
         run: |
+          set -e
+
           echo "========================================"
-          echo "Benchmark"
+          echo "Chess Engine Benchmark"
           echo "========================================"
           echo "Engine:       ${ENGINE_NAME}"
           echo "Opponent:     ${OPPONENT_NAME}"
@@ -190,7 +295,7 @@ jobs:
           echo "Concurrency:  ${CONCURRENCY}"
           echo "========================================"
 
-          cutechess-cli \
+          ./cutechess-cli \
             -engine \
               cmd=./build/nox_engine \
               name="${ENGINE_NAME}" \
@@ -210,7 +315,11 @@ jobs:
             -recover \
             -pgnout "${PGN_FILE}"
 
-      - name: Calculate results
+      # ------------------------------------------------------------
+      # Calculate W/D/L
+      # ------------------------------------------------------------
+
+      - name: Calculate benchmark results
         id: results
         run: |
           python3 <<'PY'
@@ -219,6 +328,10 @@ jobs:
           import sys
 
           pgn_file = os.environ["PGN_FILE"]
+
+          if not os.path.isfile(pgn_file):
+              print("ERROR: PGN file was not created.")
+              sys.exit(1)
 
           with open(pgn_file, encoding="utf-8") as f:
               pgn = f.read()
@@ -236,16 +349,21 @@ jobs:
           total = wins + draws + losses
 
           if total == 0:
-              print("ERROR: No results found in PGN.")
+              print("ERROR: No game results found in PGN.")
               sys.exit(1)
 
           score = (wins + draws * 0.5) / total * 100
 
+          print()
+          print("========================================")
+          print("Benchmark Result")
+          print("========================================")
           print(f"Wins:   {wins}")
           print(f"Draws:  {draws}")
           print(f"Losses: {losses}")
           print(f"Games:  {total}")
           print(f"Score:  {score:.1f}%")
+          print("========================================")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"wins={wins}\n")
@@ -255,7 +373,11 @@ jobs:
               f.write(f"score={score:.1f}\n")
           PY
 
-      - name: Add GitHub summary
+      # ------------------------------------------------------------
+      # GitHub Actions summary
+      # ------------------------------------------------------------
+
+      - name: Add benchmark summary
         if: always()
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
@@ -282,6 +404,10 @@ jobs:
           **Score: ${{ steps.results.outputs.score }}%**
           EOF
 
+      # ------------------------------------------------------------
+      # Upload PGN
+      # ------------------------------------------------------------
+
       - name: Upload PGN
         if: always()
         uses: actions/upload-artifact@v4
@@ -289,6 +415,10 @@ jobs:
           name: nox-benchmark-${{ github.sha }}
           path: ${{ env.PGN_FILE }}
           if-no-files-found: warn
+
+      # ------------------------------------------------------------
+      # Persistent history
+      # ------------------------------------------------------------
 
       - name: Update benchmark history
         if: success()
@@ -303,8 +433,13 @@ jobs:
           echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),${GITHUB_SHA},${ENGINE_NAME},${OPPONENT_NAME},${OPPONENT_ELO},${TIME_CONTROL},${ROUNDS},${GAMES},${{ steps.results.outputs.games }},${{ steps.results.outputs.wins }},${{ steps.results.outputs.draws }},${{ steps.results.outputs.losses }},${{ steps.results.outputs.score }}" \
             >> "${HISTORY_FILE}"
 
-          echo "Recent history:"
+          echo
+          echo "Recent benchmark history:"
           tail -n 10 "${HISTORY_FILE}"
+
+      # ------------------------------------------------------------
+      # Commit history
+      # ------------------------------------------------------------
 
       - name: Commit benchmark history
         if: success()
