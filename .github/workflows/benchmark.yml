@@ -131,7 +131,13 @@ jobs:
         run: |
           set -e
 
-          echo "Downloading Cute Chess v1.5.1..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            qt6-base-dev \
+            qt6-svg-dev \
+            qt6-5compat-dev
 
           curl -fL \
             "https://github.com/cutechess/cutechess/archive/refs/tags/v1.5.1.tar.gz" \
@@ -140,43 +146,18 @@ jobs:
           mkdir -p cutechess
           tar -xzf cutechess.tar.gz -C cutechess --strip-components=1
 
-          echo "Installing build dependencies..."
-
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            qt6-base-dev \
-            qt6-5compat-dev
-
-          echo "Configuring Cute Chess..."
-
           cmake -S cutechess -B cutechess/build \
             -DWITH_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=Release
-
-          echo "Building cutechess-cli only..."
 
           cmake --build cutechess/build \
             --target cli \
             --parallel 2
 
-          echo "Locating cutechess-cli..."
-
-          CUTECHESS_BIN="cutechess/build/cutechess-cli"
-
-          if [ ! -f "$CUTECHESS_BIN" ]; then
-            echo "ERROR: cutechess-cli was not built."
-            find cutechess/build -type f -name '*cutechess*' -print
-            exit 1
-          fi
-
-          cp "$CUTECHESS_BIN" ./cutechess-cli
+          cp cutechess/build/cutechess-cli ./cutechess-cli
           chmod +x ./cutechess-cli
 
-          echo "Cute Chess version:"
           ./cutechess-cli --version
-
       # ------------------------------------------------------------
       # Download Stockfish
       # ------------------------------------------------------------
