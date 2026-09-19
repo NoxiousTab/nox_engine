@@ -1,0 +1,410 @@
+name: Chess Engine Benchmark
+
+# ================================================================
+# BENCHMARK CONFIGURATION
+#
+# Change these values when you want to benchmark differently.
+# ================================================================
+
+env:
+  ENGINE_NAME: nox_engine
+
+  # Stockfish release tag.
+  STOCKFISH_VERSION: sf_19
+
+  # Name displayed by CuteChess.
+  OPPONENT_NAME: Stockfish-1700
+
+  # Stockfish UCI strength.
+  OPPONENT_ELO: "1700"
+
+  # CuteChess settings.
+  TIME_CONTROL: "1+1"
+  ROUNDS: "50"
+  GAMES: "2"
+  CONCURRENCY: "1"
+
+  # Output files.
+  PGN_FILE: nox_vs_stockfish.pgn
+  HISTORY_FILE: benchmarks/history.csv
+
+
+on:
+  push:
+  workflow_dispatch:
+
+
+permissions:
+  contents: write
+
+
+jobs:
+  benchmark:
+    name: ${{ env.ENGINE_NAME }} vs ${{ env.OPPONENT_NAME }}
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================================
+      # Checkout repository
+      # ==========================================================
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ==========================================================
+      # Install dependencies
+      # ==========================================================
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            wget \
+            tar \
+            python3 \
+            cutechess-cli
+
+      # ==========================================================
+      # Build engine
+      #
+      # Uses your actual project build script.
+      # ==========================================================
+      - name: Build Nox Engine
+        run: |
+          chmod +x compile_engine.sh
+          ./compile_engine.sh
+
+      # ==========================================================
+      # Verify engine
+      # ==========================================================
+      - name: Verify Nox Engine
+        run: |
+          echo "========================================"
+          echo "Engine"
+          echo "========================================"
+
+          ls -lh build/nox_engine
+          file build/nox_engine
+
+          echo
+          echo "========================================"
+          echo "Neural Network"
+          echo "========================================"
+
+          ls -lh neural_net/noxnet_baseline.nox
+
+          echo
+          echo "========================================"
+          echo "UCI Test"
+          echo "========================================"
+
+          timeout 5s ./build/nox_engine <<EOF
+          uci
+          quit
+          EOF
+
+      # ==========================================================
+      # Download Stockfish
+      #
+      # Stockfish 19 now provides universal binaries.
+      # We query the GitHub release API for the appropriate Linux
+      # x64 universal asset instead of relying on an old filename.
+      # ==========================================================
+      - name: Download Stockfish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          API_URL="https://api.github.com/repos/official-stockfish/Stockfish/releases/tags/${STOCKFISH_VERSION}"
+
+          echo "Fetching Stockfish release information..."
+          echo "Release: ${STOCKFISH_VERSION}"
+
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            "$API_URL" \
+            -o stockfish_release.json
+
+          python3 <<'PY'
+          import json
+          import sys
+
+          with open("stockfish_release.json") as f:
+              release = json.load(f)
+
+          assets = release.get("assets", [])
+
+          print("Available Stockfish assets:")
+          for asset in assets:
+              print("  ", asset["name"])
+
+          # Prefer the Linux x86-64 universal archive.
+          candidates = [
+              a for a in assets
+              if "ubuntu" in a["name"].lower()
+              and "x64" in a["name"].lower()
+              and "universal" in a["name"].lower()
+              and a["name"].endswith((".tar", ".tar.gz"))
+          ]
+
+          if not candidates:
+              print()
+              print("ERROR: Could not find a Linux x86-64 universal Stockfish binary.")
+              sys.exit(1)
+
+          asset = candidates[0]
+
+          print()
+          print("Selected asset:")
+          print(asset["name"])
+
+          with open("stockfish_asset_url", "w") as f:
+              f.write(asset["browser_download_url"])
+
+          with open("stockfish_asset_name", "w") as f:
+              f.write(asset["name"])
+          PY
+
+          STOCKFISH_URL=$(cat stockfish_asset_url)
+          STOCKFISH_ASSET=$(cat stockfish_asset_name)
+
+          echo
+          echo "Downloading:"
+          echo "$STOCKFISH_ASSET"
+
+          curl -fL \
+            "$STOCKFISH_URL" \
+            -o stockfish.tar
+
+          mkdir -p stockfish_extract
+          tar -xf stockfish.tar -C stockfish_extract
+
+          STOCKFISH_BIN=$(find stockfish_extract \
+            -type f \
+            -name "stockfish" \
+            -o -type f \
+            -name "stockfish-*" \
+            | head -n 1)
+
+          if [ -z "$STOCKFISH_BIN" ]; then
+            echo "ERROR: Stockfish executable was not found."
+            find stockfish_extract -type f -print
+            exit 1
+          fi
+
+          cp "$STOCKFISH_BIN" ./stockfish
+          chmod +x ./stockfish
+
+          echo
+          echo "Stockfish binary:"
+          ls -lh ./stockfish
+
+          echo
+          echo "Stockfish version:"
+          ./stockfish <<EOF
+          uci
+          quit
+          EOF
+
+      # ==========================================================
+      # Run benchmark
+      # ==========================================================
+      - name: Run Benchmark
+        run: |
+          echo "========================================"
+          echo "Benchmark Configuration"
+          echo "========================================"
+          echo "Engine:       ${ENGINE_NAME}"
+          echo "Opponent:     ${OPPONENT_NAME}"
+          echo "Opponent Elo: ${OPPONENT_ELO}"
+          echo "Time control: ${TIME_CONTROL}"
+          echo "Rounds:       ${ROUNDS}"
+          echo "Games/round:  ${GAMES}"
+          echo "Concurrency:  ${CONCURRENCY}"
+          echo
+
+          cutechess-cli \
+            -engine \
+              cmd=./build/nox_engine \
+              name="${ENGINE_NAME}" \
+              option.UseBook=false \
+            -engine \
+              cmd=./stockfish \
+              name="${OPPONENT_NAME}" \
+              option.UCI_LimitStrength=true \
+              option.UCI_Elo="${OPPONENT_ELO}" \
+            -each \
+              proto=uci \
+              tc="${TIME_CONTROL}" \
+            -rounds "${ROUNDS}" \
+            -games "${GAMES}" \
+            -repeat \
+            -concurrency "${CONCURRENCY}" \
+            -recover \
+            -pgnout "${PGN_FILE}"
+
+      # ==========================================================
+      # Calculate results from PGN
+      # ==========================================================
+      - name: Calculate Benchmark Results
+        id: results
+        run: |
+          python3 <<'PY'
+          import re
+          import os
+          import sys
+
+          pgn_file = os.environ["PGN_FILE"]
+          engine = os.environ["ENGINE_NAME"]
+          opponent = os.environ["OPPONENT_NAME"]
+          elo = os.environ["OPPONENT_ELO"]
+
+          try:
+              with open(pgn_file, "r", encoding="utf-8") as f:
+                  pgn = f.read()
+          except FileNotFoundError:
+              print("ERROR: PGN file was not generated.")
+              sys.exit(1)
+
+          results = re.findall(
+              r'^\[Result\s+"(1-0|0-1|1/2-1/2)"\]',
+              pgn,
+              re.MULTILINE
+          )
+
+          wins = 0
+          draws = 0
+          losses = 0
+
+          for result in results:
+              if result == "1-0":
+                  wins += 1
+              elif result == "0-1":
+                  losses += 1
+              else:
+                  draws += 1
+
+          total = wins + draws + losses
+
+          if total == 0:
+              print("ERROR: No game results found in PGN.")
+              sys.exit(1)
+
+          score = (wins + 0.5 * draws) / total * 100
+
+          print("========================================")
+          print("Benchmark Results")
+          print("========================================")
+          print(f"Engine:    {engine}")
+          print(f"Opponent:  {opponent}")
+          print(f"Elo:       {elo}")
+          print(f"Games:     {total}")
+          print(f"Wins:      {wins}")
+          print(f"Draws:     {draws}")
+          print(f"Losses:    {losses}")
+          print(f"Score:     {score:.1f}%")
+          print("========================================")
+
+          # GitHub Actions outputs
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"wins={wins}\n")
+              f.write(f"draws={draws}\n")
+              f.write(f"losses={losses}\n")
+              f.write(f"games={total}\n")
+              f.write(f"score={score:.1f}\n")
+          PY
+
+      # ==========================================================
+      # Add result to GitHub Actions Summary
+      # ==========================================================
+      - name: Add Benchmark Summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # Chess Engine Benchmark
+
+          ## Configuration
+
+          | Setting | Value |
+          |---|---|
+          | Engine | \`${ENGINE_NAME}\` |
+          | Opponent | \`${OPPONENT_NAME}\` |
+          | Opponent Elo | ${OPPONENT_ELO} |
+          | Time Control | ${TIME_CONTROL} |
+          | Rounds | ${ROUNDS} |
+          | Games/Round | ${GAMES} |
+          | Concurrency | ${CONCURRENCY} |
+
+          ## Result
+
+          | Result | Games |
+          |---|---:|
+          | Wins | ${{ steps.results.outputs.wins }} |
+          | Draws | ${{ steps.results.outputs.draws }} |
+          | Losses | ${{ steps.results.outputs.losses }} |
+
+          **Score: ${{ steps.results.outputs.score }}%**
+
+          Total games: **${{ steps.results.outputs.games }}**
+          EOF
+
+      # ==========================================================
+      # Upload PGN
+      # ==========================================================
+      - name: Upload Tournament PGN
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ENGINE_NAME }}-vs-${{ env.OPPONENT_NAME }}-${{ github.sha }}
+          path: ${{ env.PGN_FILE }}
+          if-no-files-found: warn
+
+      # ==========================================================
+      # Store benchmark history
+      # ==========================================================
+      - name: Update Benchmark History
+        if: success()
+        run: |
+          mkdir -p benchmarks
+
+          if [ ! -f "${HISTORY_FILE}" ]; then
+            echo "timestamp,commit,engine,opponent,opponent_elo,time_control,rounds,games_per_round,total_games,wins,draws,losses,score" \
+              > "${HISTORY_FILE}"
+          fi
+
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),${GITHUB_SHA},${ENGINE_NAME},${OPPONENT_NAME},${OPPONENT_ELO},${TIME_CONTROL},${ROUNDS},${GAMES},${{ steps.results.outputs.games }},${{ steps.results.outputs.wins }},${{ steps.results.outputs.draws }},${{ steps.results.outputs.losses }},${{ steps.results.outputs.score }}" \
+            >> "${HISTORY_FILE}"
+
+          echo
+          echo "========================================"
+          echo "Benchmark History"
+          echo "========================================"
+
+          tail -n 10 "${HISTORY_FILE}"
+
+      # ==========================================================
+      # Commit benchmark history
+      # ==========================================================
+      - name: Commit Benchmark History
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "${HISTORY_FILE}"
+
+          if git diff --cached --quiet; then
+            echo "No history changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "ci: record benchmark result [skip ci]"
+
+          git push
+
