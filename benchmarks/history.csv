@@ -1,2 +1,3 @@
 timestamp,commit,engine,opponent,opponent_elo,time_control,rounds,games_per_round,total_games,wins,draws,losses,score
 2026-09-19T19:17:31Z,f9a9886799451cf3cf9dd7b9b51cf999cc2a194f,nox_engine,Stockfish-1400,1400,5+0.1,60,2,120,37,5,78,32.9
+2026-09-19T20:14:13Z,bc05838e9aa83f43a84856486dc0df04048d28ea,nox_engine,Stockfish-1320,1320,1+1,50,2,100,79,1,20,79.5
