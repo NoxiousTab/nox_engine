@@ -2,3 +2,4 @@ build/
 nnue/
 resources/
 games_pgns/
+tools/noxnet/.venv/

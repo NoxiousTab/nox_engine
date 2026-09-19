@@ -441,12 +441,26 @@ int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
 }
 
 int Searcher::evalWithContempt(const BBoard& b) const{
+    // Eval::evaluate() is white-relative (positive = good for White) by
+    // design, always -- but searchRec()/quiesce() are written in standard
+    // negamax convention, where every returned score (this leaf/stand-pat
+    // value included) must be relative to the SIDE TO MOVE at this exact
+    // node, not always relative to White. That final conversion was
+    // missing: this function used to return Eval::evaluate()'s white-
+    // relative number completely unconverted, so every leaf reached while
+    // it was Black's turn was silently sign-inverted from what the negamax
+    // recursion assumed it was getting -- a large material lead for White
+    // would be reported as good for Black instead of catastrophic.
     int e = Eval::evaluate(b);
-    // If near draw by 50-move or repetition likely, bias by contempt
+    // Contempt nudges the WHITE-relative score in favor of whoever's turn
+    // it is when a draw looks likely -- this part was already correctly
+    // side-aware, so its logic is unchanged; it just now runs before the
+    // conversion below, on the white-relative value it was written for.
     if(b.isDrawBy50() || b.repetitionCount() >= 2){
         e += (b.st.side=='w' ? contempt : -contempt);
     }
-    return e;
+    // Convert white-relative -> side-to-move-relative. This is the fix.
+    return (b.st.side=='w') ? e : -e;
 }
 
 }
