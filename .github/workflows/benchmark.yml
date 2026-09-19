@@ -133,7 +133,7 @@ jobs:
 
           echo "Downloading Cute Chess..."
 
-          CUTECHESS_URL="https://github.com/cutechess/cutechess/releases/latest/download/cutechess-cli-linux-x86_64.tar.gz"
+          CUTECHESS_URL="https://github.com/cutechess/cutechess/archive/refs/tags/v1.5.1.tar.gz"
 
           curl -fL \
             "$CUTECHESS_URL" \
