@@ -29,6 +29,11 @@ on:
         required: true
         default: "2"
 
+      concurrency:
+        description: "Number of games to run concurrently"
+        required: true
+        default: "4"
+
 permissions:
   contents: write
 
@@ -67,12 +72,14 @@ jobs:
             echo "TIME_CONTROL=${{ inputs.time_control }}" >> "$GITHUB_ENV"
             echo "ROUNDS=${{ inputs.rounds }}" >> "$GITHUB_ENV"
             echo "GAMES=${{ inputs.games }}" >> "$GITHUB_ENV"
+            echo "CONCURRENCY=${{ inputs.concurrency }}" >> "$GITHUB_ENV"
           else
             echo "OPPONENT_NAME=Stockfish-1320" >> "$GITHUB_ENV"
             echo "OPPONENT_ELO=1320" >> "$GITHUB_ENV"
             echo "TIME_CONTROL=1+1" >> "$GITHUB_ENV"
             echo "ROUNDS=10" >> "$GITHUB_ENV"
             echo "GAMES=2" >> "$GITHUB_ENV"
+            echo "CONCURRENCY=1" >> "$GITHUB_ENV"
           fi
 
       # ------------------------------------------------------------
@@ -158,6 +165,7 @@ jobs:
           chmod +x ./cutechess-cli
 
           ./cutechess-cli --version
+
       # ------------------------------------------------------------
       # Download Stockfish
       # ------------------------------------------------------------
@@ -396,6 +404,7 @@ jobs:
           | Time Control | ${TIME_CONTROL} |
           | Rounds | ${ROUNDS} |
           | Games/Round | ${GAMES} |
+          | Concurrency | ${CONCURRENCY} |
           | Total Games | ${{ steps.results.outputs.games }} |
 
           ## Result
@@ -461,4 +470,3 @@ jobs:
 
           git commit -m "ci: record benchmark result [skip ci]"
           git push
-
