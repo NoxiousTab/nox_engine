@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+set -e
 rm -rf build/
 mkdir -p build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
