@@ -1,0 +1,7 @@
+timestamp,commit,engine,opponent,opponent_elo,time_control,rounds,games_per_round,total_games,wins,draws,losses,score
+,,nox_engine,Stockfish-1320,1320,5+0.1,60,2,120,30,7,83,27.9
+,,nox_engine,Stockfish-1400,1400,5+0.1,60,2,120,37,5,78,32.9
+,,nox_engine,Stockfish-1500,1500,5+0.1,60,2,120,10,6,104,10.8
+,,nox_engine,Stockfish-1600,1600,5+0.1,60,2,120,11,3,106,10.4
+,,nox_engine,Stockfish-1700,1700,5+0.1,60,2,120,7,1,112,6.2
+,,nox_engine,Stockfish-1800,1800,5+0.1,60,2,120,3,2,115,3.3

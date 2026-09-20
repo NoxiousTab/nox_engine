@@ -3,6 +3,6 @@ nnue/
 resources/
 games_pgns/
 tools/noxnet/.venv/
-benchmarks/
+# benchmarks/
 full_suite.sh
 
