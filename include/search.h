@@ -35,7 +35,7 @@ private:
     std::array<std::array<std::array<int,64>,64>, 2> history{}; // [side][from][to], the standard history heuristic keys on the full move (from AND to), not just the origin square. Two different moves off the same square (e.g. a queen retreat vs. a queen fork) have nothing in common positionally, so collapsing them into one bucket was actively degrading move ordering.
     std::mutex khMutex; // protects killers/history updates when threaded
 
-    int quiesce(BBoard& b, int alpha, int beta, int ply);
+    int quiesce(BBoard& b, int alpha, int beta, int ply, int checksLeft = 1);
     int searchRec(BBoard& b, int depth, int alpha, int beta, int ply);
     int evalWithContempt(const BBoard& b) const;
     std::string buildPV(BBoard& b, int maxLen = 40);

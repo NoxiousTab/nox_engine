@@ -341,7 +341,15 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
         bool isCapture = (m.flags & (CAPTURE|EN_PASSANT|PROMOTION));
         // Futility pruning: near leaf on quiet moves, if stand pat + margin <= alpha
         if(!inCheckNow && nextDepth == 0 && !isCapture){
-            int stand = evalWithContempt(b);
+            // evalWithContempt(b) is relative to whoever is to move in the
+            // board it's given. b.makeMove(m) already ran above, so at this
+            // point b's side to move is the OPPONENT, not the mover this
+            // futility check is actually judging. Negate it back into the
+            // mover's negamax frame before comparing against alpha, which is
+            // always mover-relative in this function -- comparing the raw,
+            // opponent-relative value against alpha directly (as a previous
+            // version did) mixed two opposite sign conventions.
+            int stand = -evalWithContempt(b);
             int margin = 150; // conservative
             if(stand + margin <= alpha){ b.unmakeMove(); moveIndex++; continue; }
         }
@@ -381,7 +389,13 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
                 std::lock_guard<std::mutex> lk(khMutex);
                 killers[ply][1] = killers[ply][0];
                 killers[ply][0] = m;
-                int sideIdx = (b.st.side=='w')?1:0; // just switched back
+                // Use the outer, node-entry `sideIdx` (computed once above from
+                // b.st.side before the move loop began) -- it already reflects
+                // the mover's side and stays valid here since b.st.side is back
+                // to that same value post-unmakeMove(). A previous version
+                // redeclared a second, shadowing `sideIdx` here using the
+                // OPPOSITE (w->1, b->0) mapping, which silently credited every
+                // side's good quiet moves into the other side's history slot.
                 history[sideIdx][m.from & 63][m.to & 63] += depth * depth;
             }
             if(tt.probe(key, e)){} // no-op
@@ -397,7 +411,7 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
     return alpha;
 }
 
-int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
+int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply, int checksLeft){
     if(stop || timeUp()) { stop = true; return alpha; }
     ++nodes;
     // If in check, search all legal evasions (no stand-pat)
@@ -407,7 +421,10 @@ int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
         if(evasions.empty()) return -100000 + ply; // checkmated
         for(const auto& m: evasions){
             if(!b.makeMove(m)) continue;
-            int score = -quiesce(b, -beta, -alpha, ply+1);
+            // Responding to a forced check isn't an elective check extension,
+            // so the checksLeft budget is passed through unchanged here --
+            // it's only spent below on self-initiated quiet checking moves.
+            int score = -quiesce(b, -beta, -alpha, ply+1, checksLeft);
             b.unmakeMove();
             if(score >= beta) return beta;
             if(score > alpha) alpha = score;
@@ -419,7 +436,22 @@ int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
     if(stand >= beta) return beta;
     if(alpha < stand) alpha = stand;
 
-    auto caps = b.generateCaptures();
+    // Single pseudo-legal generation pass, split into legal captures and (only
+    // when the check-extension budget is still open) legal quiet moves --
+    // avoids generating pseudo-legal moves twice and legality-filtering the
+    // whole move list twice (once via generateCaptures(), again via
+    // generateLegalMoves()) just to separate captures from quiets.
+    auto pseudo = b.generatePseudoLegalMoves();
+    std::vector<Move> caps;
+    std::vector<Move> quiets;
+    caps.reserve(pseudo.size());
+    for(const auto& pm : pseudo){
+        bool isLoud = (pm.flags & (CAPTURE|EN_PASSANT|PROMOTION));
+        if(!isLoud && checksLeft <= 0) continue; // no budget left: don't even legality-check these
+        if(!b.makeMove(pm)) continue;
+        b.unmakeMove();
+        if(isLoud) caps.push_back(pm); else quiets.push_back(pm);
+    }
     std::sort(caps.begin(), caps.end(), [&](const Move& m1, const Move& m2){ return mvv_lva(b,m1) > mvv_lva(b,m2); });
 
     for(const auto& m: caps){
@@ -432,11 +464,46 @@ int Searcher::quiesce(BBoard& b, int alpha, int beta, int ply){
         // Light SEE prune
         if(badCaptureHeuristic(b, m, stand)) continue;
         if(!b.makeMove(m)) continue;
-        int score = -quiesce(b, -beta, -alpha, ply+1);
+        int score = -quiesce(b, -beta, -alpha, ply+1, checksLeft);
         b.unmakeMove();
         if(score >= beta) return beta;
         if(score > alpha) alpha = score;
     }
+
+    // Check extensions: quiescence above only ever looks at captures, so a
+    // quiet check that forces mate (or wins material) a few plies later is
+    // otherwise invisible -- the capture-only horizon stops one ply short of
+    // it. Fold in quiet checking moves too, but only for a small, fixed
+    // number of additional plies (checksLeft), since unlike captures, check
+    // sequences don't shrink the material on the board and can otherwise
+    // recurse for a long time without terminating quickly.
+    if(checksLeft > 0){
+        for(const auto& m: quiets){
+            if(!b.makeMove(m)) continue; // already legality-checked above; should always succeed
+            char oppSide = b.st.side;
+            int oppKsq = (oppSide=='w')? b.st.wk : b.st.bk;
+            bool givesCheck = b.squareAttacked(oppKsq, (oppSide=='w')?'b':'w');
+            if(!givesCheck){ b.unmakeMove(); continue; }
+            b.unmakeMove();
+            // Selectivity filter: only pursue checks that don't outright hang
+            // material -- otherwise every quiescence node pays this extra
+            // work even in positions where no tactical check exists, which
+            // is what made the unfiltered version a wash-to-slight-loss on
+            // the full WAC suite. BBoard::see() bridges via a FEN round-trip
+            // on whatever the CURRENT board state is, so it must be called
+            // on the pre-move position, not the post-move one -- hence the
+            // unmake above before this check, and the re-make below only for
+            // moves that pass it (see() is also documented to handle
+            // non-capturing moves correctly, not just captures).
+            if(b.see(m) < 0) continue;
+            if(!b.makeMove(m)) continue; // re-apply; already legality-checked, guaranteed to succeed
+            int score = -quiesce(b, -beta, -alpha, ply+1, checksLeft-1);
+            b.unmakeMove();
+            if(score >= beta) return beta;
+            if(score > alpha) alpha = score;
+        }
+    }
+
     return alpha;
 }
 

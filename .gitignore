@@ -4,3 +4,5 @@ resources/
 games_pgns/
 tools/noxnet/.venv/
 benchmarks/
+full_suite.sh
+
