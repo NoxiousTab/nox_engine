@@ -444,7 +444,7 @@ jobs:
 
           HISTORY_FILE="benchmarks/history.csv"
 
-          ROW="$(date -u +%Y-%m-%dT%H:%M:%SZ),${GITHUB_SHA},${ENGINE_NAME},${OPPONENT_NAME},${OPPONENT_ELO},${TIME_CONTROL},${ROUNDS},${GAMES},${{ steps.results.outputs.games }},${{ steps.results.outputs.wins }},${{ steps.results.outputs.draws }},${{ steps.results.outputs.losses }},${{ steps.results.outputs.score }}"
+          ROW="$(date -u +%Y-%m-%dT%H:%M:%SZ),${GITHUB_RUN_ID},${GITHUB_SHA},${ENGINE_NAME},${OPPONENT_NAME},${OPPONENT_ELO},${TIME_CONTROL},${ROUNDS},${GAMES},${{ steps.results.outputs.games }},${{ steps.results.outputs.wins }},${{ steps.results.outputs.draws }},${{ steps.results.outputs.losses }},${{ steps.results.outputs.score }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -454,24 +454,25 @@ jobs:
             echo "History push attempt ${attempt}/10"
             echo "========================================"
 
-            # Get the latest remote main.
+            # ALWAYS get the newest remote main.
             git fetch origin main
 
-            # Start from the latest remote state.
+            # Start from the newest remote state.
             git reset --hard origin/main
 
-            # Make sure the directory exists.
             mkdir -p benchmarks
 
             # Create the file if it doesn't exist.
             if [ ! -f "${HISTORY_FILE}" ]; then
-              echo "timestamp,commit,engine,opponent,opponent_elo,time_control,rounds,games_per_round,total_games,wins,draws,losses,score" \
+              echo "timestamp,run_id,commit,engine,opponent,opponent_elo,time_control,rounds,games_per_round,total_games,wins,draws,losses,score" \
                 > "${HISTORY_FILE}"
             fi
 
-            # Avoid adding the same workflow result twice.
-            if grep -Fq ",${GITHUB_SHA},${ENGINE_NAME}," "${HISTORY_FILE}"; then
-              echo "This benchmark result is already recorded."
+            # A workflow run has a unique GITHUB_RUN_ID.
+            # This prevents the same workflow run from being recorded twice
+            # while still allowing multiple runs on the same commit.
+            if grep -Fq ",${GITHUB_RUN_ID},${GITHUB_SHA}," "${HISTORY_FILE}"; then
+              echo "This workflow run is already recorded."
               exit 0
             fi
 
@@ -498,11 +499,10 @@ jobs:
             echo "Push lost a race with another workflow."
             echo "Fetching latest main and retrying..."
 
-            # Remove the failed local commit before next attempt.
-            git reset --hard origin/main
+            # IMPORTANT:
+            # The next loop iteration fetches origin/main again
+            # before resetting, so the other workflow's row is preserved.
 
-            # Small randomized-ish delay isn't strictly necessary,
-            # but helps reduce repeated collisions.
             sleep $((attempt * 2))
           done
 
