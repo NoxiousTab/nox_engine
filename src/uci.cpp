@@ -211,15 +211,32 @@ void UCI::cmdGo(const std::string& line){
     // go wtime 300000 btime 300000 winc 2000 binc 2000 movestogo 40 depth 10 movetime 1000
     std::istringstream ss(line);
     std::string word; ss >> word; // go
-    int wtime=-1,btime=-1,winc=0,binc=0,movestogo=30,depth=0,movetime=-1;
+    int wtime=-1,btime=-1,winc=0,binc=0,movestogo=-1,depth=0,movetime=-1;
     while(ss>>word){
         if(word=="wtime") ss>>wtime; else if(word=="btime") ss>>btime; else if(word=="winc") ss>>winc; else if(word=="binc") ss>>binc; else if(word=="movestogo") ss>>movestogo; else if(word=="depth") ss>>depth; else if(word=="movetime") ss>>movetime; }
     int useDepth = depth? depth : searcher.maxDepth;
+    // If the GUI doesn't tell us how many moves remain -- true for
+    // sudden-death time controls (e.g. "5+0.1"), which never send
+    // movestogo at all -- don't assume a flat 30 moves are left for the
+    // ENTIRE game. That under-allocates early (move 3 isn't meaningfully
+    // different from move 30 under a flat divisor) and doesn't taper as
+    // the game actually progresses. Estimate against a rough expected game
+    // length instead, with a floor so long games don't get squeezed to
+    // nothing once past it.
+    int estimatedMovesToGo = std::max(20, 45 - board.st.fullmove);
+    int effectiveMovesToGo = (movestogo > 0) ? movestogo : estimatedMovesToGo;
     int timeMs = 1000;
     if(movetime>0) timeMs = movetime; else {
-        if(board.st.side=='w' && wtime>=0) timeMs = std::max(10, wtime/ (movestogo>0? movestogo:30) + winc/2);
-        else if(board.st.side=='b' && btime>=0) timeMs = std::max(10, btime/ (movestogo>0? movestogo:30) + binc/2);
+        if(board.st.side=='w' && wtime>=0) timeMs = std::max(10, wtime/effectiveMovesToGo + winc/2);
+        else if(board.st.side=='b' && btime>=0) timeMs = std::max(10, btime/effectiveMovesToGo + binc/2);
         else timeMs = 1000;
+        // Reserve a small safety margin against non-search overhead (UCI
+        // I/O, process/thread scheduling) so a computed budget doesn't cut
+        // things right to the wire on the actual clock. Only applied to the
+        // wtime/btime-derived budget, not a user-specified "movetime" above
+        // -- an explicit movetime request should be honored as given.
+        constexpr int MOVE_OVERHEAD_MS = 30;
+        timeMs = std::max(50, timeMs - MOVE_OVERHEAD_MS);
     }
     if(debug) std::cerr << "[debug] go timeMs="<<timeMs<<" depth="<<useDepth<< std::endl;
     // Try book move if enabled -- this is instant, so handle it synchronously
