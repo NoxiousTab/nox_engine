@@ -11,3 +11,4 @@ full_suite.sh
 venv/
 **/venv/
 **/.venv/
+node_modules/
