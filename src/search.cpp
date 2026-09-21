@@ -102,6 +102,7 @@ void Searcher::clearForNewGame(){
 SearchResult Searcher::search(BBoard& b, int timeMs){
     stop = false;
     nodes = 0;
+    tt.newSearch();
     auto start = std::chrono::steady_clock::now();
     deadline = start + std::chrono::milliseconds(timeMs);
     softDeadline = start + std::chrono::milliseconds((timeMs*90)/100);

@@ -16,6 +16,11 @@ struct TTEntry {
                        // into garbage values on store.
     int8_t depth{0};
     uint8_t bound{0};
+    uint16_t gen{0}; // which newSearch() generation wrote this entry -- lets
+                      // store() evict a stale entry from an earlier position
+                      // in a long game even if it was searched deeper than
+                      // what we're storing now, instead of it permanently
+                      // occupying the slot just because of that old depth.
     Move best{};
 };
 
@@ -46,19 +51,35 @@ public:
         // position/game keep being probed and trusted for the new one.
         std::lock_guard<std::mutex> lock(mtx);
         table.assign(table.size(), TTEntry{});
+        currentGen = 0;
+    }
+    void newSearch(){
+        // Called once per Searcher::search() call (i.e. once per actual move
+        // the engine is asked to think about), NOT per iterative-deepening
+        // ply within that call. store()'s replacement policy uses this to
+        // always evict an entry from an older generation on a collision,
+        // regardless of its stored depth -- without this, a deep entry from
+        // move 5 of a long game could permanently block a slot that would
+        // otherwise be useful for move 50, since depth-only comparison never
+        // gives a reason to replace it.
+        std::lock_guard<std::mutex> lock(mtx);
+        ++currentGen;
     }
     void store(uint64_t key, int depth, int score, Bound bnd, const Move& best){
         if(table.empty()) return;
         std::lock_guard<std::mutex> lock(mtx);
-        TTEntry e; e.key=key; e.depth=(int8_t)depth; e.score=(int32_t)score; e.bound=(uint8_t)bnd; e.best=best;
+        TTEntry e; e.key=key; e.depth=(int8_t)depth; e.score=(int32_t)score; e.bound=(uint8_t)bnd; e.best=best; e.gen=currentGen;
         TTEntry& dst = ref(key);
-        // replace if deeper or empty
-        if(dst.key==0 || depth >= dst.depth) dst = e;
+        // Replace if empty, from an older generation (stale -- evict
+        // unconditionally, independent of depth), or at least as deep
+        // within the current generation.
+        if(dst.key==0 || dst.gen != currentGen || depth >= dst.depth) dst = e;
     }
 private:
     std::vector<TTEntry> table;
     size_t mask{0};
     size_t mod{0};
+    uint16_t currentGen{0};
     mutable std::mutex mtx;
     const TTEntry& at(uint64_t key) const{
         if(mod) return table[key % mod];
