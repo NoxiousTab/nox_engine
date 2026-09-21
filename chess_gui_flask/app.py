@@ -7,7 +7,13 @@ from flask import Flask, render_template, jsonify, request
 app = Flask(__name__)
 
 # CONFIGURATION: Update this to point to your engine binary
-ENGINE_PATH = "/home/noxious/Desktop/open_source/nox_engine/build/nox_engine"  # e.g., "./arena_engine.exe" or "./my_engine"
+ENGINE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "../",
+    "build",
+    "nox_engine"
+)
+
 
 engine_process = None
 engine_queue = queue.Queue()

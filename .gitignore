@@ -1,4 +1,5 @@
-build/
+build/*
+!build/nox_engine
 nnue/
 resources/
 games_pgns/
