@@ -151,12 +151,22 @@ SearchResult Searcher::search(BBoard& b, int timeMs){
         std::atomic<int> idx{0};
         std::mutex mtx;
         int localBestScore = -10000000; Move localBest{};
+        // Separate from the global `stop` flag on purpose: this only needs to
+        // tell OTHER root worker threads "a cutoff was already found against
+        // this depth's narrow aspiration window, no need to keep grinding
+        // through remaining root moves under it" -- the aspiration-window
+        // widen/re-search below, and further iterative-deepening depths,
+        // must still run normally afterward. Setting the global `stop` here
+        // instead (as a previous version effectively almost did, via a
+        // formula that was actually a no-op except when time was already up)
+        // would incorrectly abort those too.
+        std::atomic<bool> rootCutoff{false};
 
         auto worker = [&](){
             // Each thread works on moves
             for(;;){
                 int i = idx.fetch_add(1);
-                if(i >= (int)moves.size() || stop || timeUpLocal()) break;
+                if(i >= (int)moves.size() || stop || timeUpLocal() || rootCutoff) break;
                 const Move m = moves[i];
                 BBoard tb = b; // thread-local copy
                 if(!tb.makeMove(m)) continue;
@@ -180,7 +190,7 @@ SearchResult Searcher::search(BBoard& b, int timeMs){
                 std::lock_guard<std::mutex> lock(mtx);
                 if(score > localBestScore){ localBestScore = score; localBest = m; }
                 if(score > alpha){ alpha = score; }
-                if(alpha >= beta){ stop = stop || timeUpLocal(); break; }
+                if(alpha >= beta){ rootCutoff = true; break; }
             }
         };
 
