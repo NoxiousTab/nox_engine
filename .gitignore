@@ -6,3 +6,7 @@ tools/noxnet/.venv/
 # benchmarks/
 full_suite.sh
 
+.venv/
+venv/
+**/venv/
+**/.venv/
