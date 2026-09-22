@@ -272,6 +272,22 @@ SearchResult Searcher::search(BBoard& b, int timeMs){
     SearchResult res; res.score = bestScore; res.best = best; return res;
 }
 
+// Null-move pruning assumes that if a position is already good enough that
+// even skipping a whole turn leaves the side to move at or above beta, then
+// any real move must be at least as good, so the node can be pruned without
+// searching it further. That assumption fails in zugzwang: when every legal
+// move actively worsens the position (the textbook case being king-and-pawn
+// endgames with no minor/major pieces left), skipping the turn can look
+// artificially safe precisely because the side to move has nothing useful
+// to do -- the real moves may all be worse than doing nothing, which is the
+// one case null-move's reasoning can't detect. The standard, well-tested
+// mitigation (used by essentially every serious engine) is to simply disable
+// null-move whenever the side to move has no non-pawn, non-king material.
+static bool hasNonPawnMaterial(const BBoard& b, char side){
+    if(side=='w') return (b.st.pieces[WN] | b.st.pieces[WB] | b.st.pieces[WR] | b.st.pieces[WQ]) != 0;
+    return (b.st.pieces[BN] | b.st.pieces[BB] | b.st.pieces[BR] | b.st.pieces[BQ]) != 0;
+}
+
 int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
     if(stop || timeUp()) { stop = true; return 0; }
     ++nodes;
@@ -294,8 +310,9 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
         if(alpha >= beta) return ttScore;
     }
 
-    // Null-move pruning: skip when in check
-    if(depth >= 3 && !inCheckNow){
+    // Null-move pruning: skip when in check, or when the side to move has no
+    // non-pawn material (zugzwang guard -- see hasNonPawnMaterial() above).
+    if(depth >= 3 && !inCheckNow && hasNonPawnMaterial(b, sideNow)){
         if(b.makeNullMove()){
             int R = 2 + (depth > 6); // simple reduction
             int score = -searchRec(b, depth - 1 - R, -beta, -beta + 1, ply+1);
