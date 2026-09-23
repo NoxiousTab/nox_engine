@@ -337,11 +337,17 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
     // redundant recomputation the old per-comparison lambda did.
     Move killer0{}, killer1{};
     int sideIdx = (b.st.side=='w')?0:1;
+    // killers[] is sized MAX_PLY (128); ply itself is never clamped anywhere
+    // (searchRec's own check extension and quiescence's capture/check chain
+    // can both add ply beyond the nominal root depth), so this is the one
+    // place that actually needs a defensive bound -- history[] is already
+    // safe since its indices are masked with `& 63`.
+    int kply = std::min(ply, MAX_PLY - 1);
     std::vector<int> histSnapshot(moves.size());
     {
         std::lock_guard<std::mutex> lk(khMutex);
-        killer0 = killers[ply][0];
-        killer1 = killers[ply][1];
+        killer0 = killers[kply][0];
+        killer1 = killers[kply][1];
         for(size_t i=0;i<moves.size();++i) histSnapshot[i] = history[sideIdx][moves[i].from & 63][moves[i].to & 63];
     }
     std::vector<std::pair<int,Move>> scored; scored.reserve(moves.size());
@@ -415,8 +421,8 @@ int Searcher::searchRec(BBoard& b, int depth, int alpha, int beta, int ply){
             // store killer/history
             if(!(m.flags & (CAPTURE|EN_PASSANT|PROMOTION))){
                 std::lock_guard<std::mutex> lk(khMutex);
-                killers[ply][1] = killers[ply][0];
-                killers[ply][0] = m;
+                killers[kply][1] = killers[kply][0];
+                killers[kply][0] = m;
                 // Use the outer, node-entry `sideIdx` (computed once above from
                 // b.st.side before the move loop began) -- it already reflects
                 // the mover's side and stays valid here since b.st.side is back

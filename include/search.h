@@ -16,7 +16,23 @@ struct SearchResult {
 
 class Searcher {
 public:
-    int maxDepth{10};
+    // This is a root safety ceiling, not the normal stopping mechanism -- in
+    // ordinary time-based play (go wtime/btime, no explicit "depth"), the
+    // deadline/softDeadline checks in search() are what actually stop
+    // iterative deepening; this cap should essentially never bind. It used
+    // to default to 10, which DID bind on every real-time-control game
+    // (nothing else in main.cpp/uci.cpp ever raised it for the common case
+    // of no explicit "depth"), silently discarding the vast majority of the
+    // clock in anything slower than bullet. 80 leaves 48 plies of headroom
+    // under MAX_PLY (128, the killers[]/history[] array bound below) for the
+    // check-extension in searchRec() and quiescence's own capture/check
+    // chain to stack on top of the root depth without risking an
+    // out-of-bounds killers[ply] access (see the ply-clamping added at its
+    // call sites for the same reason). An explicit "go depth N" or the
+    // "Skill" handicap option still override this via searcher.maxDepth as
+    // before.
+    int maxDepth{80};
+
     std::atomic<bool> stop{false};
     int contempt{0}; // centipawns bias for drawish positions
     TT tt;
