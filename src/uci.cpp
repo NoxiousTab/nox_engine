@@ -208,6 +208,11 @@ std::string UCI::moveToUci(const Move& m) const{
 }
 
 void UCI::cmdGo(const std::string& line){
+    // Captured before any parsing or synchronous pre-search work (book
+    // probe, NNUE load) below, and passed through to Searcher::search() as
+    // its deadline anchor -- see the comment there for why this needs to be
+    // taken here rather than inside search() itself.
+    auto goReceivedTime = std::chrono::steady_clock::now();
     // go wtime 300000 btime 300000 winc 2000 binc 2000 movestogo 40 depth 10 movetime 1000
     std::istringstream ss(line);
     std::string word; ss >> word; // go
@@ -235,7 +240,14 @@ void UCI::cmdGo(const std::string& line){
         // things right to the wire on the actual clock. Only applied to the
         // wtime/btime-derived budget, not a user-specified "movetime" above
         // -- an explicit movetime request should be honored as given.
-        constexpr int MOVE_OVERHEAD_MS = 30;
+        // Was 30ms: harmless back when the old maxDepth=10 cap meant the
+        // engine always finished in ~150-250ms regardless of budget and
+        // could never get close to a deadline. Now that it actually uses
+        // most of its allotted time, 30ms isn't enough margin to absorb
+        // realistic UCI I/O + thread-scheduling jitter -- especially under
+        // concurrent multi-game load -- which showed up as real time
+        // forfeits once the depth cap was raised.
+        constexpr int MOVE_OVERHEAD_MS = 100;
         timeMs = std::max(50, timeMs - MOVE_OVERHEAD_MS);
     }
     if(debug) std::cerr << "[debug] go timeMs="<<timeMs<<" depth="<<useDepth<< std::endl;
@@ -254,8 +266,8 @@ void UCI::cmdGo(const std::string& line){
     // to read "stop"/"quit"/etc. while it's in progress -- see stopAndJoinSearch().
     // The thread prints "bestmove" itself once search() returns, since nothing
     // else is blocking on it anymore.
-    searchThread = std::thread([this, timeMs, prevDepth]{
-        SearchResult res = searcher.search(board, timeMs);
+    searchThread = std::thread([this, timeMs, prevDepth, goReceivedTime]{
+        SearchResult res = searcher.search(board, timeMs, goReceivedTime);
         searcher.maxDepth = prevDepth;
         if(res.best.from==0 && res.best.to==0){ std::cout << "bestmove 0000" << std::endl; }
         else { std::cout << "bestmove " << moveToUci(res.best) << std::endl; }

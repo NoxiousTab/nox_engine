@@ -99,11 +99,20 @@ void Searcher::clearForNewGame(){
     history = {};
 }
 
-SearchResult Searcher::search(BBoard& b, int timeMs){
+SearchResult Searcher::search(BBoard& b, int timeMs, std::chrono::steady_clock::time_point startTime){
     stop = false;
     nodes = 0;
     tt.newSearch();
-    auto start = std::chrono::steady_clock::now();
+    // startTime defaults to now() (unchanged behavior for any caller that
+    // doesn't pass one explicitly), but uci.cmdGo() passes the moment "go"
+    // was actually received, captured before the search thread is spawned
+    // and before any synchronous pre-search work (book probe, NNUE load).
+    // Anchoring here instead of taking a fresh timestamp on this line means
+    // thread-scheduling delay under load (multiple concurrent games, e.g.)
+    // is charged against the engine's own deadline instead of silently
+    // eating into real clock time cutechess is tracking but this function
+    // never saw.
+    auto start = startTime;
     deadline = start + std::chrono::milliseconds(timeMs);
     softDeadline = start + std::chrono::milliseconds((timeMs*90)/100);
 

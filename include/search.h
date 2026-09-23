@@ -42,7 +42,8 @@ public:
     int threads{1};
     std::atomic<bool> parallelRoot{false};
 
-    SearchResult search(BBoard& b, int timeMs = 1000);
+    SearchResult search(BBoard& b, int timeMs = 1000,
+                         std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now());
     void clearForNewGame(); 
 
 private:
