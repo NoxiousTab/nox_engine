@@ -240,15 +240,21 @@ void UCI::cmdGo(const std::string& line){
         // things right to the wire on the actual clock. Only applied to the
         // wtime/btime-derived budget, not a user-specified "movetime" above
         // -- an explicit movetime request should be honored as given.
-        // Was 30ms: harmless back when the old maxDepth=10 cap meant the
-        // engine always finished in ~150-250ms regardless of budget and
-        // could never get close to a deadline. Now that it actually uses
-        // most of its allotted time, 30ms isn't enough margin to absorb
-        // realistic UCI I/O + thread-scheduling jitter -- especially under
-        // concurrent multi-game load -- which showed up as real time
-        // forfeits once the depth cap was raised.
-        constexpr int MOVE_OVERHEAD_MS = 100;
-        timeMs = std::max(50, timeMs - MOVE_OVERHEAD_MS);
+        // This was 30ms, then briefly 100ms based on a wrong assumption
+        // that these time controls were minutes-scale (e.g. "5+0.1" read as
+        // 5 minutes). They're actually seconds-scale ("5+0.1" is 5 SECONDS
+        // + a 0.1s increment), so real per-move budgets here are typically
+        // only ~100-300ms -- against which 100ms of overhead was eating the
+        // majority of every move's already-tiny allowance, starving the
+        // search far worse than the original maxDepth=10 bug ever did.
+        // 15ms is sized against genuine UCI I/O cost (writing "bestmove",
+        // parsing), which is a few ms, not tens-to-hundreds -- the bigger
+        // hazard this margin used to have to cover (thread-scheduling delay
+        // between "go" arriving and the search thread actually starting) is
+        // now handled structurally by anchoring the deadline to
+        // goReceivedTime above, independent of how large this constant is.
+        constexpr int MOVE_OVERHEAD_MS = 15;
+        timeMs = std::max(20, timeMs - MOVE_OVERHEAD_MS);
     }
     if(debug) std::cerr << "[debug] go timeMs="<<timeMs<<" depth="<<useDepth<< std::endl;
     // Try book move if enabled -- this is instant, so handle it synchronously
